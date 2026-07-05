@@ -29,6 +29,25 @@ Le bouton **🌐 En ligne** (ou `Ctrl+O`) ouvre l'annuaire des utilisateurs
 connectés : clique sur quelqu'un pour lui envoyer une demande d'ami (ou accepter
 la sienne) sans avoir à taper son nom.
 
+## ⚔️ Duels entre amis (jeux multijoueur + paris)
+
+Ouvre une conversation privée avec un ami en ligne et clique **⚔️ Défier** :
+choisis le jeu et une mise en jetons (0 = pour l'honneur). Ton ami reçoit
+l'invitation, l'accepte, et vous jouez en temps réel :
+
+- **Morpion** — le premier à aligner trois symboles.
+- **Puissance 4** — aligne quatre jetons (horizontal, vertical ou diagonale).
+
+Le gagnant rafle la mise, et le résultat est posté dans votre conversation.
+Tout se passe côté serveur : impossible de tricher sur les coups ou l'argent.
+
+## 📊 Statistiques
+
+Le bouton **📊** (ou `Ctrl+T`) ouvre tes stats : parties jouées, victoires /
+défaites, taux de réussite, gain net, plus gros gain, détail par jeu et
+historique de tes dernières parties (casino comme duels). Ton solde est toujours
+visible dans la barre du haut.
+
 ## Installation
 
 ```bash
@@ -79,5 +98,6 @@ ajouté automatiquement).
 | `papote/client.py`   | interface terminal (Textual) |
 | `papote/db.py`       | stockage SQLite (messages + soldes du casino) |
 | `papote/casino.py`   | logique des jeux de casino (aléatoire côté serveur) |
+| `papote/games.py`    | logique des jeux multijoueur (morpion, puissance 4) |
 | `papote/protocol.py` | format des messages JSON échangés |
 | `papote/net.py`      | connexion WebSocket + config côté client |

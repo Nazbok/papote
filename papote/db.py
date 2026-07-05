@@ -72,6 +72,15 @@ class DB:
                 body TEXT NOT NULL,
                 ts REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS game_log(
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                kind TEXT NOT NULL,            -- coinflip/dice/slots/roulette/blackjack/morpion/puissance4
+                opponent TEXT,                -- adversaire (duels) ou NULL (casino)
+                bet INTEGER NOT NULL,
+                delta INTEGER NOT NULL,
+                ts REAL NOT NULL
+            );
             """
         )
         self._migrate_casino()
@@ -347,11 +356,13 @@ class DB:
             "games_played": r["games_played"],
         }
 
-    def apply_casino_result(self, uid: int, delta: int) -> int:
-        """Applique le gain/perte d'une partie et renvoie le nouveau solde.
+    def record_play(self, uid: int, kind: str, delta: int, bet: int = 0,
+                    opponent: str | None = None) -> int:
+        """Applique le résultat d'une partie, la journalise, renvoie le nouveau solde.
 
-        Le solde ne descend jamais sous zéro. Met à jour le record de gain et
-        le compteur de parties de façon atomique.
+        Le solde ne descend jamais sous zéro. Met à jour le record de gain, le
+        compteur de parties et ajoute une ligne dans game_log, le tout de façon
+        atomique. Sert au casino comme aux duels entre amis.
         """
         r = self.get_user_by_id(uid)
         new_balance = max(0, r["balance"] + delta)
@@ -360,8 +371,16 @@ class DB:
             "UPDATE users SET balance=?, biggest_win=?, games_played=games_played+1 WHERE id=?",
             (new_balance, biggest, uid),
         )
+        self.con.execute(
+            "INSERT INTO game_log(user_id, kind, opponent, bet, delta, ts) VALUES(?,?,?,?,?,?)",
+            (uid, kind, opponent, bet, delta, time.time()),
+        )
         self.con.commit()
         return new_balance
+
+    # rétrocompatibilité : ancien nom
+    def apply_casino_result(self, uid: int, delta: int) -> int:
+        return self.record_play(uid, "casino", delta)
 
     def claim_bonus(self, uid: int) -> int:
         """Crédite le bonus anti-faillite ; refuse si le solde est trop élevé."""
@@ -388,5 +407,53 @@ class DB:
                 "biggest_win": r["biggest_win"],
                 "games_played": r["games_played"],
             }
+            for r in rows
+        ]
+
+    # --- statistiques & historique -----------------------------------------
+
+    def stats(self, uid: int) -> dict:
+        u = self.get_user_by_id(uid)
+        agg = self.con.execute(
+            """SELECT COUNT(*) n,
+                      COALESCE(SUM(CASE WHEN delta > 0 THEN 1 ELSE 0 END), 0) wins,
+                      COALESCE(SUM(CASE WHEN delta < 0 THEN 1 ELSE 0 END), 0) losses,
+                      COALESCE(SUM(CASE WHEN delta = 0 THEN 1 ELSE 0 END), 0) draws,
+                      COALESCE(SUM(delta), 0) net,
+                      COALESCE(SUM(bet), 0) wagered,
+                      COALESCE(MAX(delta), 0) best
+               FROM game_log WHERE user_id=?""",
+            (uid,),
+        ).fetchone()
+        per_game = [
+            {"kind": r["kind"], "games": r["n"], "net": r["net"], "wins": r["wins"]}
+            for r in self.con.execute(
+                """SELECT kind, COUNT(*) n, COALESCE(SUM(delta),0) net,
+                          COALESCE(SUM(CASE WHEN delta>0 THEN 1 ELSE 0 END),0) wins
+                   FROM game_log WHERE user_id=? GROUP BY kind ORDER BY n DESC""",
+                (uid,),
+            ).fetchall()
+        ]
+        return {
+            "balance": u["balance"],
+            "games": agg["n"],
+            "wins": agg["wins"],
+            "losses": agg["losses"],
+            "draws": agg["draws"],
+            "net": agg["net"],
+            "wagered": agg["wagered"],
+            "biggest_win": max(u["biggest_win"], agg["best"]),
+            "per_game": per_game,
+        }
+
+    def game_history(self, uid: int, limit: int = 30):
+        rows = self.con.execute(
+            """SELECT kind, opponent, bet, delta, ts FROM game_log
+               WHERE user_id=? ORDER BY ts DESC LIMIT ?""",
+            (uid, limit),
+        ).fetchall()
+        return [
+            {"kind": r["kind"], "opponent": r["opponent"], "bet": r["bet"],
+             "delta": r["delta"], "ts": r["ts"]}
             for r in rows
         ]

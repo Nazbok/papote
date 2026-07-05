@@ -21,6 +21,21 @@ Requêtes client -> serveur (champ "op") :
   bj_hit            {}                     # blackjack : tirer une carte
   bj_stand          {}                     # blackjack : rester
   who_online        {}                     # liste des utilisateurs connectés
+  stats             {}                     # statistiques de jeu du joueur
+  game_history      {limit?}               # dernières parties jouées
+  duel_challenge    {opponent, game:"morpion"|"puissance4", bet}
+  duel_accept       {match_id}
+  duel_decline      {match_id}
+  duel_move         {match_id, move}       # move = case (morpion) ou colonne (p4)
+  duel_forfeit      {match_id}
+
+Événements de duel poussés (ev) :
+  duel_invite    {match_id, from, game, bet}
+  duel_start     {match_id, game, bet, players, board, turn, you}
+  duel_update    {match_id, board, turn, last_move}
+  duel_over      {match_id, board, winner, you, delta, balance, result}
+  duel_declined  {match_id, by}
+  duel_cancel    {match_id, reason}
 
 Réponses serveur -> client :
   {"ok":true, "reply":<op>, ...}   ou   {"ok":false, "reply":<op>, "error":"..."}

@@ -447,6 +447,244 @@ class OnlineScreen(ModalScreen):
             self.dismiss(None)
 
 
+# --- Duels entre amis (jeux multijoueur + paris) -----------------------------
+
+GAME_LABELS = {"morpion": "Morpion", "puissance4": "Puissance 4"}
+DUEL_SYMBOLS = {"morpion": ["❌", "⭕"], "puissance4": ["🔴", "🟡"]}
+DUEL_EMPTY = {"morpion": " ", "puissance4": "⚪"}
+
+
+class ChallengeModal(ModalScreen):
+    def __init__(self, opponent: str):
+        super().__init__()
+        self.opponent = opponent
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal"):
+            yield Static(f"⚔️  Défier {escape(self.opponent)}", classes="modal-title")
+            yield Input(value="0", id="challenge-bet", type="integer")
+            yield Static("[dim]Mise en jetons (0 = pour l'honneur)[/dim]", classes="modal-hint")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Morpion", variant="primary", id="g-morpion")
+                yield Button("Puissance 4", variant="primary", id="g-puissance4")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Annuler", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id in ("g-morpion", "g-puissance4"):
+            try:
+                bet = max(0, int(self.query_one("#challenge-bet", Input).value))
+            except ValueError:
+                bet = 0
+            self.dismiss((event.button.id[2:], bet))
+        else:
+            self.dismiss(None)
+
+
+class DuelInviteModal(ModalScreen):
+    def __init__(self, frm: str, game: str, bet: int, match_id: int):
+        super().__init__()
+        self.frm = frm
+        self.game = game
+        self.bet = bet
+        self.match_id = match_id
+
+    def compose(self) -> ComposeResult:
+        stake = f"pour [b yellow]{self.bet}[/b yellow] jetons" if self.bet else "pour l'honneur"
+        with Vertical(classes="modal"):
+            yield Static("⚔️  Défi reçu !", classes="modal-title")
+            yield Static(
+                f"[b]{escape(self.frm)}[/b] te défie au [b]{GAME_LABELS.get(self.game, self.game)}[/b] {stake}.",
+                classes="modal-hint",
+            )
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Accepter", variant="success", id="accept")
+                yield Button("Refuser", variant="error", id="decline")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "accept":
+            self.app.net_send(op="duel_accept", match_id=self.match_id)
+        else:
+            self.app.net_send(op="duel_decline", match_id=self.match_id)
+        self.dismiss(None)
+
+
+class DuelScreen(ModalScreen):
+    BINDINGS = [("escape", "leave", "Quitter")]
+
+    def __init__(self, game, match_id, you, players, bet, board, turn):
+        super().__init__()
+        self.game = game
+        self.mid = match_id
+        self.you = you
+        self.players = players
+        self.bet = bet
+        self.board = board
+        self.turn = turn
+        self.over = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="duel-box"):
+            yield Static("", id="duel-title")
+            yield Static("", id="duel-status")
+            if self.game == "morpion":
+                with Vertical(id="morpion-grid"):
+                    for r in range(3):
+                        with Horizontal(classes="duel-row"):
+                            for c in range(3):
+                                yield Button(" ", id=f"cell-{r * 3 + c}", classes="morpion-cell")
+            else:
+                with Horizontal(classes="duel-row"):
+                    for c in range(7):
+                        yield Button(f"{c + 1}", id=f"col-{c}", classes="p4-col")
+                yield Static("", id="p4-board")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("🏳️ Abandonner", id="forfeit")
+                yield Button("✖ Fermer", id="close", disabled=True)
+
+    def on_mount(self) -> None:
+        self.render_board()
+
+    def _opponent(self) -> str:
+        return self.players[1 - self.you]
+
+    def render_board(self) -> None:
+        sym = DUEL_SYMBOLS[self.game]
+        my_turn = (self.turn == self.you) and not self.over
+        stake = f"   ·   mise [b yellow]{self.bet}[/b yellow]" if self.bet else ""
+        self.query_one("#duel-title", Static).update(
+            f"⚔️  {GAME_LABELS[self.game]}   [cyan]{sym[self.you]} toi[/cyan]  vs  "
+            f"[magenta]{sym[1 - self.you]} {escape(self._opponent())}[/magenta]{stake}"
+        )
+        if self.game == "morpion":
+            for i in range(9):
+                btn = self.query_one(f"#cell-{i}", Button)
+                v = self.board[i]
+                btn.label = sym[int(v)] if v != "" else " "
+                btn.disabled = (v != "" or not my_turn)
+        else:
+            rows = []
+            for r in range(6):
+                cells = (sym[int(self.board[r * 7 + c])] if self.board[r * 7 + c] != ""
+                         else DUEL_EMPTY["puissance4"] for c in range(7))
+                rows.append(" ".join(cells))
+            self.query_one("#p4-board", Static).update("\n".join(rows))
+            for c in range(7):
+                self.query_one(f"#col-{c}", Button).disabled = (self.board[c] != "" or not my_turn)
+        status = self.query_one("#duel-status", Static)
+        if not self.over:
+            if my_turn:
+                status.update("[b green]À toi de jouer ![/b green]")
+            else:
+                status.update(f"[dim]Au tour de {escape(self._opponent())}…[/dim]")
+
+    def update_state(self, board, turn) -> None:
+        self.board = board
+        self.turn = turn
+        self.render_board()
+
+    def finish(self, msg) -> None:
+        self.board = msg.get("board", self.board)
+        self.over = True
+        self.render_board()
+        delta = msg.get("delta", 0)
+        tag = "green" if delta > 0 else ("red" if delta < 0 else "yellow")
+        self.query_one("#duel-status", Static).update(
+            f"[b {tag}]{escape(str(msg.get('result', 'Partie terminée')))}[/b {tag}]"
+        )
+        self.query_one("#forfeit", Button).disabled = True
+        self.query_one("#close", Button).disabled = False
+
+    def action_leave(self) -> None:
+        if not self.over:
+            self.app.net_send(op="duel_forfeit", match_id=self.mid)
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "close":
+            self.dismiss(None)
+        elif bid == "forfeit":
+            self.app.net_send(op="duel_forfeit", match_id=self.mid)
+        elif bid.startswith("cell-"):
+            self.app.net_send(op="duel_move", match_id=self.mid, move=int(bid[5:]))
+        elif bid.startswith("col-"):
+            self.app.net_send(op="duel_move", match_id=self.mid, move=int(bid[4:]))
+
+
+# --- Statistiques ------------------------------------------------------------
+
+STAT_KIND_LABELS = {
+    "coinflip": "🪙 Pile ou face", "dice": "🎲 Dés", "slots": "🎰 Machine à sous",
+    "roulette": "🎡 Roulette", "blackjack": "🃏 Blackjack", "casino": "🎲 Casino",
+    "morpion": "⚔️ Morpion", "puissance4": "⚔️ Puissance 4",
+}
+
+
+def _signed(n: int) -> str:
+    if n > 0:
+        return f"[green]+{n}[/green]"
+    if n < 0:
+        return f"[red]{n}[/red]"
+    return "0"
+
+
+class StatsScreen(ModalScreen):
+    BINDINGS = [("escape", "close", "Fermer")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="stats-box"):
+            yield Static("📊  Tes statistiques", id="stats-title")
+            yield Static("", id="stats-summary")
+            yield Static("", id="stats-pergame")
+            yield Static("Dernières parties", id="stats-hist-title")
+            yield RichLog(id="stats-hist", markup=True, wrap=True)
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Fermer", variant="primary", id="close")
+
+    def on_mount(self) -> None:
+        self.app.net_send(op="stats")
+        self.app.net_send(op="game_history", limit=20)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def show(self, s: dict) -> None:
+        rate = (s["wins"] / s["games"] * 100) if s["games"] else 0
+        self.query_one("#stats-summary", Static).update(
+            f"Solde : [b yellow]{s['balance']}[/b yellow] jetons\n"
+            f"Parties : [b]{s['games']}[/b]    "
+            f"[green]{s['wins']} V[/green] · [red]{s['losses']} D[/red] · {s['draws']} N    "
+            f"([b]{rate:.0f}%[/b] de réussite)\n"
+            f"Gain net : {_signed(s['net'])}    Total misé : {s['wagered']}    "
+            f"Plus gros gain : [green]+{s['biggest_win']}[/green]"
+        )
+        if s["per_game"]:
+            lines = ["[b]Par jeu :[/b]"]
+            for g in s["per_game"]:
+                label = STAT_KIND_LABELS.get(g["kind"], g["kind"])
+                lines.append(f"  {label}  —  {g['games']} parties, net {_signed(g['net'])}")
+            self.query_one("#stats-pergame", Static).update("\n".join(lines))
+        else:
+            self.query_one("#stats-pergame", Static).update("[dim]Aucune partie pour l'instant.[/dim]")
+
+    def show_history(self, games: list) -> None:
+        log = self.query_one("#stats-hist", RichLog)
+        log.clear()
+        if not games:
+            log.write("[dim]Tu n'as encore rien joué. Direction le casino ![/dim]")
+            return
+        for g in games:
+            when = time.strftime("%d/%m %H:%M", time.localtime(g["ts"]))
+            label = STAT_KIND_LABELS.get(g["kind"], g["kind"])
+            vs = f" vs {escape(g['opponent'])}" if g.get("opponent") else ""
+            stake = f" (mise {g['bet']})" if g["bet"] else ""
+            log.write(f"[dim]{when}[/dim]  {label}{vs}{stake}   {_signed(g['delta'])}")
+
+
 # --- Écran principal ---------------------------------------------------------
 
 class MainScreen(Screen):
@@ -455,12 +693,14 @@ class MainScreen(Screen):
         ("ctrl+o", "online", "🌐 En ligne"),
         ("ctrl+g", "new_group", "Nouveau groupe"),
         ("ctrl+j", "casino", "🎰 Casino"),
+        ("ctrl+t", "stats", "📊 Stats"),
         ("ctrl+p", "leaderboard", "🏆 Classement"),
         ("ctrl+q", "quit", "Quitter"),
     ]
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        yield Static("", id="topbar")
         with Horizontal(id="body"):
             with Vertical(id="sidebar-pane"):
                 yield Static(" Conversations", id="side-title")
@@ -471,9 +711,12 @@ class MainScreen(Screen):
                 with Horizontal(id="side-buttons2"):
                     yield Button("👥 Groupe", id="btn-group")
                     yield Button("🎰 Casino", variant="success", id="btn-casino")
+                    yield Button("📊", id="btn-stats")
                     yield Button("🏆", id="btn-board")
             with Vertical(id="chat-pane"):
-                yield Static(" Choisis une conversation à gauche", id="chat-header")
+                with Horizontal(id="chat-topbar"):
+                    yield Static(" Choisis une conversation à gauche", id="chat-header")
+                    yield Button("⚔️ Défier", id="btn-duel")
                 yield RichLog(id="log", wrap=True, markup=True, highlight=False)
                 yield Input(placeholder="Écris un message puis Entrée…", id="composer")
         yield Footer()
@@ -496,17 +739,28 @@ class MainScreen(Screen):
     def action_online(self) -> None:
         self.app.open_online()
 
+    def action_stats(self) -> None:
+        self.app.open_stats()
+
+    def action_duel(self) -> None:
+        self.app.challenge_current()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-add":
+        bid = event.button.id
+        if bid == "btn-add":
             self.action_add_friend()
-        elif event.button.id == "btn-online":
+        elif bid == "btn-online":
             self.action_online()
-        elif event.button.id == "btn-group":
+        elif bid == "btn-group":
             self.action_new_group()
-        elif event.button.id == "btn-casino":
+        elif bid == "btn-casino":
             self.action_casino()
-        elif event.button.id == "btn-board":
+        elif bid == "btn-stats":
+            self.action_stats()
+        elif bid == "btn-board":
             self.action_leaderboard()
+        elif bid == "btn-duel":
+            self.action_duel()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         convo = getattr(event.item, "convo", None)
@@ -534,6 +788,7 @@ class PapoteApp(App):
     #login-buttons { height: auto; align: center middle; padding-top: 1; }
     #status { text-align: center; color: $warning; padding-top: 1; }
 
+    #topbar { height: 1; background: $boost; color: $text; text-style: bold; }
     #body { height: 1fr; }
     #sidebar-pane { width: 34; border-right: solid $accent; }
     #side-title { background: $accent; color: $text; text-style: bold; }
@@ -541,9 +796,28 @@ class PapoteApp(App):
     #side-buttons { height: auto; align: center middle; padding: 1 0 0 0; }
     #side-buttons2 { height: auto; align: center middle; padding: 1 0; }
     #chat-pane { width: 1fr; }
-    #chat-header { background: $boost; text-style: bold; height: 1; }
+    #chat-topbar { height: 1; background: $boost; }
+    #chat-header { width: 1fr; text-style: bold; height: 1; content-align: left middle; }
+    #btn-duel { min-width: 12; height: 1; border: none; background: $error; color: $text; }
     #log { height: 1fr; background: $surface; padding: 0 1; }
     #composer { dock: bottom; }
+    .modal-hint { text-align: center; color: $text-muted; padding-bottom: 1; }
+
+    DuelScreen, StatsScreen { align: center middle; }
+    #duel-box { width: auto; height: auto; border: round $accent; padding: 1 3; background: $panel; }
+    #duel-title { text-align: center; text-style: bold; padding-bottom: 1; }
+    #duel-status { text-align: center; height: 1; padding-bottom: 1; }
+    #morpion-grid { width: auto; height: auto; align: center middle; }
+    .duel-row { width: auto; height: auto; align: center middle; }
+    .morpion-cell { width: 7; height: 3; min-width: 7; margin: 0; content-align: center middle; text-style: bold; }
+    .p4-col { width: 4; min-width: 4; margin: 0; }
+    #p4-board { padding: 1 0; text-align: center; }
+    #stats-box { width: 74; height: auto; border: round $success; padding: 1 2; background: $panel; }
+    #stats-title { text-align: center; text-style: bold; color: $success; padding-bottom: 1; }
+    #stats-summary { padding-bottom: 1; }
+    #stats-pergame { padding-bottom: 1; }
+    #stats-hist-title { text-style: bold; }
+    #stats-hist { height: 10; background: $surface; padding: 0 1; }
 
     AddFriendModal, NewGroupModal { align: center middle; }
     .modal { width: 56; height: auto; border: round $accent; padding: 1 2; background: $panel; }
@@ -599,6 +873,8 @@ class PapoteApp(App):
         self.roulette = None       # écran roulette (si ouvert)
         self.blackjack = None      # écran blackjack (si ouvert)
         self.online_screen = None  # écran « qui est en ligne » (si ouvert)
+        self.stats_screen = None   # écran statistiques (si ouvert)
+        self.duel_screen = None    # écran de duel en cours (si ouvert)
 
     def on_mount(self) -> None:
         self.login = LoginScreen()
@@ -645,8 +921,25 @@ class PapoteApp(App):
         self.main = MainScreen()
         await self.switch_screen(self.main)
         self.refresh_sidebar()
+        self._refresh_topbar()
         self.net_send(op="casino_state")
         self._receiver()
+
+    def _set_balance(self, value) -> None:
+        self.balance = value
+        self._refresh_topbar()
+
+    def _refresh_topbar(self) -> None:
+        if not self.main:
+            return
+        try:
+            bar = self.main.query_one("#topbar", Static)
+        except Exception:
+            return
+        bar.update(
+            f"  💬 [b]papote[/b]    ·    👤 {escape(self.username)}"
+            f"    ·    💰 [b yellow]{self.balance}[/b yellow] jetons  "
+        )
 
     def _login_status(self, text: str) -> None:
         try:
@@ -700,6 +993,23 @@ class PapoteApp(App):
                 if f["username"] == msg["username"]:
                     f["online"] = msg["online"]
             self.refresh_sidebar()
+        elif ev == "duel_invite":
+            self.push_screen(DuelInviteModal(msg["from"], msg["game"], msg["bet"], msg["match_id"]))
+        elif ev == "duel_start":
+            self.open_duel(msg)
+        elif ev == "duel_update":
+            if self.duel_screen and self.duel_screen.mid == msg["match_id"]:
+                self.duel_screen.update_state(msg["board"], msg["turn"])
+        elif ev == "duel_over":
+            self._set_balance(msg.get("balance", self.balance))
+            if self.duel_screen and self.duel_screen.mid == msg["match_id"]:
+                self.duel_screen.finish(msg)
+        elif ev == "duel_declined":
+            self.notify(f"{msg['by']} a refusé ton défi.", severity="warning")
+        elif ev == "duel_cancel":
+            if self.duel_screen and self.duel_screen.mid == msg.get("match_id"):
+                self.duel_screen.dismiss(None)
+            self.notify(msg.get("reason", "Partie annulée."), severity="warning")
 
     def _on_reply(self, msg: dict) -> None:
         reply = msg.get("reply")
@@ -721,21 +1031,21 @@ class PapoteApp(App):
                 for m in msg["messages"]:
                     self._write_message(m)
         elif reply == "casino_state":
-            self.balance = msg.get("balance", self.balance)
+            self._set_balance(msg.get("balance", self.balance))
             if self.casino:
                 self.casino.refresh_balance()
         elif reply == "casino_play":
-            self.balance = msg.get("balance", self.balance)
+            self._set_balance(msg.get("balance", self.balance))
             if msg.get("game") == "roulette" and self.roulette:
                 self.roulette.on_result(msg)
             elif self.casino:
                 self.casino.on_result(msg)
         elif reply == "casino_bonus":
-            self.balance = msg.get("balance", self.balance)
+            self._set_balance(msg.get("balance", self.balance))
             if self.casino:
                 self.casino.on_bonus()
         elif reply == "blackjack":
-            self.balance = msg.get("balance", self.balance)
+            self._set_balance(msg.get("balance", self.balance))
             if self.blackjack:
                 self.blackjack.render_state(msg)
         elif reply == "leaderboard":
@@ -745,6 +1055,14 @@ class PapoteApp(App):
             if self.online_screen:
                 self.run_worker(self.online_screen.show(msg.get("users", [])),
                                 exclusive=True, group="online")
+        elif reply == "duel_challenge":
+            self.notify(f"Défi envoyé à {msg.get('opponent', '')} — en attente de sa réponse…")
+        elif reply == "stats":
+            if self.stats_screen:
+                self.stats_screen.show(msg)
+        elif reply == "game_history":
+            if self.stats_screen:
+                self.stats_screen.show_history(msg.get("games", []))
 
     def _incoming_message(self, m: dict) -> None:
         if m["to_type"] == "dm":
@@ -843,6 +1161,40 @@ class PapoteApp(App):
             return
         self.online_screen = OnlineScreen()
         self.push_screen(self.online_screen, lambda _=None: setattr(self, "online_screen", None))
+
+    def open_stats(self) -> None:
+        if not self.main:
+            return
+        self.stats_screen = StatsScreen()
+        self.push_screen(self.stats_screen, lambda _=None: setattr(self, "stats_screen", None))
+
+    # --- duels entre amis ---------------------------------------------------
+
+    def challenge_current(self) -> None:
+        """Défie l'ami de la conversation privée ouverte."""
+        if not self.current or self.current[0] != "dm":
+            self.notify("Ouvre une conversation privée avec un ami pour le défier.",
+                        severity="warning")
+            return
+        opponent = self.current[1]
+        self.push_screen(ChallengeModal(opponent), self._on_challenge)
+
+    def _on_challenge(self, result) -> None:
+        if result:
+            game, bet = result
+            self.net_send(op="duel_challenge", opponent=self.current[1], game=game, bet=bet)
+
+    def open_duel(self, msg) -> None:
+        if self.duel_screen is not None:
+            try:
+                self.duel_screen.dismiss(None)
+            except Exception:
+                pass
+        self.duel_screen = DuelScreen(
+            msg["game"], msg["match_id"], msg["you"], msg["players"],
+            msg["bet"], msg["board"], msg["turn"],
+        )
+        self.push_screen(self.duel_screen, lambda _=None: setattr(self, "duel_screen", None))
 
     # --- barre latérale -----------------------------------------------------
 

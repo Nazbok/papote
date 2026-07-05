@@ -8,7 +8,7 @@ import signal
 
 import websockets
 
-from . import DEFAULT_PORT, casino, protocol
+from . import DEFAULT_PORT, casino, games, protocol
 from .db import DB
 
 
@@ -17,6 +17,8 @@ class Server:
         self.db = db
         self.online: dict[str, set] = {}   # username -> {websockets}
         self.blackjack: dict[int, dict] = {}  # user_id -> partie de blackjack en cours
+        self.duels: dict[int, dict] = {}   # match_id -> duel entre amis
+        self._match_seq = 0
 
     # --- présence / envoi ---------------------------------------------------
 
@@ -170,6 +172,28 @@ class Server:
             elif op == "who_online":
                 await ws.send(protocol.ok(op, users=self._online_users(user)))
 
+            elif op == "stats":
+                await ws.send(protocol.ok(op, **self.db.stats(uid)))
+
+            elif op == "game_history":
+                limit = min(int(req.get("limit", 30)), 100)
+                await ws.send(protocol.ok(op, games=self.db.game_history(uid, limit)))
+
+            elif op == "duel_challenge":
+                await self._handle_duel_challenge(ws, user, req)
+
+            elif op == "duel_accept":
+                await self._handle_duel_accept(ws, user, req)
+
+            elif op == "duel_decline":
+                await self._handle_duel_decline(ws, user, req)
+
+            elif op == "duel_move":
+                await self._handle_duel_move(ws, user, req)
+
+            elif op == "duel_forfeit":
+                await self._handle_duel_forfeit(user, int(req.get("match_id", -1)))
+
             else:
                 await ws.send(protocol.err(op or "?", "Opération inconnue."))
         except (KeyError, ValueError) as e:
@@ -251,7 +275,7 @@ class Server:
         except ValueError as e:
             await ws.send(protocol.err("casino_play", str(e)))
             return
-        balance = self.db.apply_casino_result(uid, outcome["delta"])
+        balance = self.db.record_play(uid, outcome["game"], outcome["delta"], bet=bet)
         await ws.send(protocol.ok("casino_play", bet=bet, balance=balance, **outcome))
 
     # --- blackjack ----------------------------------------------------------
@@ -274,7 +298,7 @@ class Server:
         self.blackjack[uid] = game
         balance = state["balance"]
         if game["done"]:                       # blackjack immédiat : on solde tout de suite
-            balance = self.db.apply_casino_result(uid, game["delta"])
+            balance = self.db.record_play(uid, "blackjack", game["delta"], bet=bet)
             self.blackjack.pop(uid, None)
         await ws.send(protocol.ok("blackjack", balance=balance, **casino.bj_public(game)))
 
@@ -290,7 +314,7 @@ class Server:
             casino.bj_stand(game)
         balance = self.db.casino_state(uid)["balance"]
         if game["done"]:
-            balance = self.db.apply_casino_result(uid, game["delta"])
+            balance = self.db.record_play(uid, "blackjack", game["delta"], bet=game["bet"])
             self.blackjack.pop(uid, None)
         await ws.send(protocol.ok("blackjack", balance=balance, **casino.bj_public(game)))
 
@@ -304,6 +328,190 @@ class Server:
             for uname in sorted(self.online)
             if uname != user["username"]
         ]
+
+    # --- duels entre amis (jeux multijoueur + paris) ------------------------
+
+    async def _handle_duel_challenge(self, ws, user, req):
+        uid, uname = user["id"], user["username"]
+        game = req.get("game")
+        if game not in games.GAMES:
+            await ws.send(protocol.err("duel_challenge", "Jeu inconnu."))
+            return
+        opp_name = str(req.get("opponent", "")).strip()
+        opp = self.db.get_user(opp_name)
+        if not opp:
+            await ws.send(protocol.err("duel_challenge", "Joueur introuvable."))
+            return
+        if opp["id"] == uid:
+            await ws.send(protocol.err("duel_challenge", "Tu ne peux pas te défier toi-même."))
+            return
+        if not self.db.are_friends(uid, opp["id"]):
+            await ws.send(protocol.err("duel_challenge", "Vous devez être amis pour vous défier."))
+            return
+        if not self.is_online(opp_name):
+            await ws.send(protocol.err("duel_challenge", f"{opp_name} n'est pas en ligne."))
+            return
+        try:
+            bet = int(req.get("bet", 0))
+        except (TypeError, ValueError):
+            bet = -1
+        if bet < 0:
+            await ws.send(protocol.err("duel_challenge", "Mise invalide."))
+            return
+        if bet > self.db.casino_state(uid)["balance"]:
+            await ws.send(protocol.err("duel_challenge", "Solde insuffisant pour cette mise."))
+            return
+        self._match_seq += 1
+        mid = self._match_seq
+        self.duels[mid] = {
+            "id": mid, "game": game, "bet": bet,
+            "players": [uname, opp_name],       # index 0 = celui qui défie
+            "board": games.new_board(game),
+            "turn": 0, "status": "pending",
+        }
+        await self.push(opp_name, protocol.event(
+            "duel_invite", match_id=mid, game=game, bet=bet, **{"from": uname}))
+        await ws.send(protocol.ok("duel_challenge", match_id=mid, opponent=opp_name,
+                                  game=game, bet=bet))
+
+    async def _handle_duel_accept(self, ws, user, req):
+        mid = int(req.get("match_id", -1))
+        duel = self.duels.get(mid)
+        if not duel or duel["status"] != "pending" or duel["players"][1] != user["username"]:
+            await ws.send(protocol.err("duel_accept", "Défi introuvable ou expiré."))
+            return
+        if duel["bet"] > 0:
+            challenger = self.db.get_user(duel["players"][0])
+            if not challenger or self.db.casino_state(challenger["id"])["balance"] < duel["bet"]:
+                await self._cancel_duel(mid, "L'adversaire n'a plus assez de jetons.")
+                return
+            if self.db.casino_state(user["id"])["balance"] < duel["bet"]:
+                await ws.send(protocol.err("duel_accept", "Solde insuffisant pour cette mise."))
+                return
+        duel["status"] = "active"
+        for idx, uname in enumerate(duel["players"]):
+            await self.push(uname, protocol.event(
+                "duel_start", match_id=mid, game=duel["game"], bet=duel["bet"],
+                players=duel["players"], board=duel["board"], turn=duel["turn"], you=idx))
+
+    async def _handle_duel_decline(self, ws, user, req):
+        mid = int(req.get("match_id", -1))
+        duel = self.duels.get(mid)
+        if not duel or user["username"] not in duel["players"]:
+            return
+        challenger = duel["players"][0]
+        self.duels.pop(mid, None)
+        await self.push(challenger, protocol.event("duel_declined", match_id=mid,
+                                                   by=user["username"]))
+
+    async def _handle_duel_move(self, ws, user, req):
+        mid = int(req.get("match_id", -1))
+        duel = self.duels.get(mid)
+        if not duel or duel["status"] != "active" or user["username"] not in duel["players"]:
+            await ws.send(protocol.err("duel_move", "Partie introuvable."))
+            return
+        idx = duel["players"].index(user["username"])
+        if idx != duel["turn"]:
+            await ws.send(protocol.err("duel_move", "Ce n'est pas ton tour."))
+            return
+        move = req.get("move")
+        if not games.is_legal(duel["game"], duel["board"], move):
+            await ws.send(protocol.err("duel_move", "Coup invalide."))
+            return
+        duel["board"] = games.apply_move(duel["game"], duel["board"], move, idx)
+        win = games.winner(duel["game"], duel["board"])
+        if win is not None:
+            await self._finish_duel(mid, winner_idx=win, last_move=move)
+        elif games.is_full(duel["game"], duel["board"]):
+            await self._finish_duel(mid, winner_idx=None, last_move=move)
+        else:
+            duel["turn"] = 1 - idx
+            for uname in duel["players"]:
+                await self.push(uname, protocol.event(
+                    "duel_update", match_id=mid, board=duel["board"],
+                    turn=duel["turn"], last_move=move))
+
+    async def _finish_duel(self, mid, winner_idx, last_move=None):
+        duel = self.duels.get(mid)
+        if not duel:
+            return
+        duel["status"] = "over"
+        label = games.GAMES[duel["game"]]
+        bet = duel["bet"]
+        players = duel["players"]
+        for idx, uname in enumerate(players):
+            u = self.db.get_user(uname)
+            if u is None:
+                continue
+            delta = 0 if winner_idx is None else (bet if idx == winner_idx else -bet)
+            balance = self.db.record_play(u["id"], duel["game"], delta, bet=bet,
+                                          opponent=players[1 - idx])
+            await self.push(uname, protocol.event(
+                "duel_over", match_id=mid, board=duel["board"], winner=winner_idx,
+                you=idx, delta=delta, balance=balance, last_move=last_move,
+                result=self._duel_result_text(idx, winner_idx, label, bet)))
+        await self._post_duel_chat(duel, winner_idx)
+        self.duels.pop(mid, None)
+
+    @staticmethod
+    def _duel_result_text(idx, winner_idx, label, bet):
+        if winner_idx is None:
+            return f"{label} : match nul."
+        if idx == winner_idx:
+            return f"{label} : tu gagnes !" + (f" (+{bet} jetons)" if bet else "")
+        return f"{label} : perdu…" + (f" (-{bet} jetons)" if bet else "")
+
+    async def _post_duel_chat(self, duel, winner_idx):
+        players = duel["players"]
+        label = games.GAMES[duel["game"]]
+        bet = duel["bet"]
+        a, b = self.db.get_user(players[0]), self.db.get_user(players[1])
+        if not a or not b:
+            return
+        if winner_idx is None:
+            author = a
+            body = f"⚔️ {label} : match nul." + (f" (mise de {bet} rendue)" if bet else "")
+        else:
+            author = self.db.get_user(players[winner_idx])
+            body = f"⚔️ {label} : {players[winner_idx]} gagne" + (f" {bet} jetons !" if bet else " la partie !")
+        other = b if author["id"] == a["id"] else a
+        saved = self.db.save_message(author["id"], "dm", other["id"], body)
+        ev = protocol.event("message", msg={
+            "id": saved["id"], "from": author["username"], "to_type": "dm",
+            "to": other["username"], "body": body, "ts": saved["ts"]})
+        await self.push(players[0], ev)
+        await self.push(players[1], ev)
+
+    async def _handle_duel_forfeit(self, user, mid):
+        duel = self.duels.get(mid)
+        if not duel or user["username"] not in duel["players"]:
+            return
+        idx = duel["players"].index(user["username"])
+        if duel["status"] == "pending":
+            self.duels.pop(mid, None)
+            await self.push(duel["players"][0],
+                            protocol.event("duel_declined", match_id=mid, by=user["username"]))
+        else:
+            await self._finish_duel(mid, winner_idx=1 - idx)
+
+    async def _cancel_duel(self, mid, reason):
+        duel = self.duels.pop(mid, None)
+        if not duel:
+            return
+        for uname in duel["players"]:
+            await self.push(uname, protocol.event("duel_cancel", match_id=mid, reason=reason))
+
+    async def _abandon_duels(self, uname):
+        for mid, duel in list(self.duels.items()):
+            if uname not in duel["players"]:
+                continue
+            idx = duel["players"].index(uname)
+            if duel["status"] == "active":
+                await self._finish_duel(mid, winner_idx=1 - idx)
+            else:
+                self.duels.pop(mid, None)
+                await self.push(duel["players"][1 - idx], protocol.event(
+                    "duel_cancel", match_id=mid, reason=f"{uname} s'est déconnecté."))
 
     # --- boucle par connexion ----------------------------------------------
 
@@ -331,6 +539,7 @@ class Server:
                 self._remove_online(user["username"], ws)
                 if not self.is_online(user["username"]):
                     self.blackjack.pop(user["id"], None)
+                    await self._abandon_duels(user["username"])
                     await self.notify_presence(user, False)
 
 
