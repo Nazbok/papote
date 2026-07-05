@@ -220,6 +220,10 @@ class Server:
             elif op == "duel_forfeit":
                 await self._handle_duel_forfeit(user, int(req.get("match_id", -1)))
 
+            elif op in ("call_offer", "call_answer", "call_ice",
+                        "call_decline", "call_end"):
+                await self._handle_call(ws, user, op, req)
+
             else:
                 await ws.send(protocol.err(op or "?", "Opération inconnue."))
         except (KeyError, ValueError) as e:
@@ -538,6 +542,36 @@ class Server:
                 self.duels.pop(mid, None)
                 await self.push(duel["players"][1 - idx], protocol.event(
                     "duel_cancel", match_id=mid, reason=f"{uname} s'est déconnecté."))
+
+    # --- appels vocaux (WebRTC : le serveur relaie juste la signalisation) --
+
+    _CALL_EVENTS = {
+        "call_offer": "call_incoming",
+        "call_answer": "call_answered",
+        "call_ice": "call_ice",
+        "call_decline": "call_declined",
+        "call_end": "call_ended",
+    }
+
+    async def _handle_call(self, ws, user, op, req):
+        uid, uname = user["id"], user["username"]
+        to_name = str(req.get("to", "")).strip()
+        target = self.db.get_user(to_name)
+        if not target:
+            await ws.send(protocol.err(op, "Utilisateur introuvable."))
+            return
+        if not self.db.are_friends(uid, target["id"]):
+            await ws.send(protocol.err(op, "Vous n'êtes pas amis."))
+            return
+        if op == "call_offer" and not self.is_online(to_name):
+            await ws.send(protocol.err(op, f"{to_name} n'est pas en ligne."))
+            return
+        payload = {"from": uname}
+        if "sdp" in req:
+            payload["sdp"] = req["sdp"]
+        if "cand" in req:
+            payload["cand"] = req["cand"]
+        await self.push(to_name, protocol.event(self._CALL_EVENTS[op], **payload))
 
     # --- boucle par connexion ----------------------------------------------
 

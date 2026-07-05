@@ -28,6 +28,11 @@ Requêtes client -> serveur (champ "op") :
   duel_decline      {match_id}
   duel_move         {match_id, move}       # move = case (morpion) ou colonne (p4)
   duel_forfeit      {match_id}
+  call_offer        {to, sdp}              # appel vocal : proposition WebRTC
+  call_answer       {to, sdp}              # appel vocal : réponse WebRTC
+  call_ice          {to, cand}             # appel vocal : candidat ICE
+  call_decline      {to}                   # appel vocal : refuser
+  call_end          {to}                   # appel vocal : raccrocher
 
 Événements de duel poussés (ev) :
   duel_invite    {match_id, from, game, bet}
@@ -46,6 +51,11 @@ Réponses serveur -> client :
   friend_accepted{username}
   group_added    {group}
   presence       {username, online}
+  call_incoming  {from, sdp}
+  call_answered  {from, sdp}
+  call_ice       {from, cand}
+  call_declined  {from}
+  call_ended     {from}
 """
 
 from __future__ import annotations

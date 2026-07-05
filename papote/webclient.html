@@ -200,6 +200,8 @@ input{font-family:inherit}
 @keyframes spinwheel{to{transform:rotate(1440deg)}}
 .flip{animation:flip .6s}
 @keyframes flip{0%{transform:rotateY(0)}100%{transform:rotateY(720deg)}}
+.callpulse{animation:callpulse 1s ease-in-out infinite}
+@keyframes callpulse{0%,100%{transform:scale(1)}50%{transform:scale(1.16)}}
 
 @media(max-width:720px){
   .sidebar{width:100%;position:absolute;inset:0;z-index:10;transition:transform .28s}
@@ -237,6 +239,7 @@ input{font-family:inherit}
     <div class="chip" id="me-chip">👤 <span id="me-name"></span></div>
     <div class="chip coins">🪙 <span id="me-balance">0</span></div>
     <div class="spacer"></div>
+    <button class="iconbtn" id="nav-notif" title="Activer les notifications">🔔</button>
     <button class="iconbtn" id="nav-online" title="En ligne">🌐</button>
     <button class="iconbtn" id="nav-casino" title="Casino">🎰</button>
     <button class="iconbtn" id="nav-stats" title="Stats">📊</button>
@@ -258,6 +261,8 @@ input{font-family:inherit}
           <div class="nm" id="chat-title">Choisis une conversation</div>
           <div class="sub" id="chat-sub"></div>
         </div>
+        <button class="btn sm green" id="btn-call" title="Appel vocal" style="display:none">📞</button>
+        <button class="btn sm ghost" id="btn-gadd" title="Ajouter un membre" style="display:none">➕</button>
         <button class="btn sm pink" id="btn-duel">⚔️ Défier</button>
       </div>
       <div class="log" id="log">
@@ -274,6 +279,8 @@ input{font-family:inherit}
 <div id="toasts"></div>
 <div id="reconnect" class="hidden">Reconnexion au serveur…</div>
 <div id="overlays"></div>
+<div id="call-ui"></div>
+<audio id="call-audio" autoplay playsinline></audio>
 
 <script>
 "use strict";
@@ -286,7 +293,9 @@ const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},
 
 const S={ws:null,token:store.get("papote_token"),username:"",balance:0,
   friends:[],groups:[],current:null,unread:{},duel:null,connected:false,
-  reconnectTimer:null,delay:600,authMode:"login",pendingInvite:null};
+  reconnectTimer:null,delay:600,authMode:"login",pendingInvite:null,
+  call:null,pendingCall:null};
+let pendingIce=[];
 
 /* ---------- WebSocket ---------- */
 function wsURL(){
@@ -323,7 +332,10 @@ function onReply(m){
     if(["register","login","auth"].includes(m.reply)){
       if(m.reply==="auth"){S.token=null;store.del("papote_token");showLogin();}
       $("#login-err").textContent=m.error||"Erreur.";
-    } else toast(m.error||"Erreur.","err");
+    } else {
+      toast(m.error||"Erreur.","err");
+      if(m.reply&&m.reply.indexOf("call")===0) endCall(false);
+    }
     return;
   }
   switch(m.reply){
@@ -334,6 +346,7 @@ function onReply(m){
     case "friend_list": case "friend_add": case "friend_accept":
       if(m.friends){S.friends=m.friends;renderSidebar();} break;
     case "group_create": S.groups=m.groups||S.groups; renderSidebar(); break;
+    case "group_add": if(m.group){mergeGroup(m.group);toast("✅ Membre ajouté à « "+m.group.name+" »","ok");} break;
     case "history":
       renderHistory(m); break;
     case "casino_state": setBalance(m.balance); break;
@@ -351,12 +364,22 @@ function onReply(m){
 function onEvent(m){
   switch(m.ev){
     case "message": incoming(m.msg); break;
-    case "friend_request": toast("📨 Demande d'ami de "+m.from); send("friend_list"); break;
+    case "friend_request": toast("📨 Demande d'ami de "+m.from); notify("📨 Demande d'ami","de "+m.from); beep(); send("friend_list"); break;
     case "friend_accepted": toast(m.username+" a accepté ta demande !","ok"); send("friend_list"); break;
-    case "group_added": S.groups=S.groups.filter(g=>g.id!==m.group.id).concat([m.group]); toast("Ajouté au groupe « "+m.group.name+" »"); renderSidebar(); break;
+    case "group_added": {
+      const known=S.groups.some(g=>g.id===m.group.id);
+      mergeGroup(m.group);
+      if(!known){toast("Ajouté au groupe « "+m.group.name+" »"); notify("👥 Nouveau groupe",m.group.name); beep();}
+      break;
+    }
     case "presence":
       S.friends.forEach(f=>{if(f.username===m.username)f.online=m.online}); renderSidebar(); break;
-    case "duel_invite": showInvite(m); break;
+    case "duel_invite": showInvite(m); notify("⚔️ Défi de "+m.from,"Partie de "+m.game); beep(); break;
+    case "call_incoming": onCallIncoming(m); break;
+    case "call_answered": onCallAnswered(m); break;
+    case "call_ice": onCallIce(m); break;
+    case "call_declined": toast(m.from+" a refusé l'appel.","err"); endCall(false); break;
+    case "call_ended": toast(m.from+" a raccroché."); endCall(false); break;
     case "duel_start": openDuel(m); break;
     case "duel_update": if(S.duel&&S.duel.mid===m.match_id){S.duel.board=m.board;S.duel.turn=m.turn;renderDuel();} break;
     case "duel_over": setBalance(m.balance); if(S.duel&&S.duel.mid===m.match_id){S.duel.board=m.board;S.duel.over=true;S.duel.result=m.result;S.duel.delta=m.delta;S.duel.winner=m.winner;renderDuel();} break;
@@ -392,10 +415,16 @@ function enterApp(){
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
   $("#me-name").textContent=S.username;
   renderSidebar();
+  initAudio();
+  if(("Notification" in window)&&Notification.permission==="default"){
+    try{Notification.requestPermission()}catch(e){}
+  }
 }
 function setBalance(b){ if(typeof b==="number"){S.balance=b; $("#me-balance").textContent=b;} }
 
 $("#nav-logout").onclick=()=>{S.token=null;store.del("papote_token");if(S.ws)S.ws.close();location.reload();};
+$("#nav-notif").onclick=enableNotifications;
+$("#btn-call").onclick=()=>{if(S.current&&S.current.type==="dm")startCall(S.current.id);};
 $("#nav-online").onclick=()=>{openOnline();send("who_online");};
 $("#nav-casino").onclick=openCasino;
 $("#nav-stats").onclick=()=>{openStats();send("stats");send("game_history",{limit:20});};
@@ -453,6 +482,8 @@ function openConversation(c,name,isGroup){
   S.current=c; delete S.unread[convoKey(c)];
   $("#chat-title").textContent=(isGroup?"👥 ":"💬 ")+name;
   $("#btn-duel").style.display=isGroup?"none":"";
+  $("#btn-call").style.display=isGroup?"none":"";
+  $("#btn-gadd").style.display=isGroup?"":"none";
   const g=isGroup?S.groups.find(x=>x.id===c.id):null;
   $("#chat-sub").textContent=g?g.members.join(", "):"";
   $("#log").innerHTML=""; renderSidebar();
@@ -468,9 +499,16 @@ function renderHistory(m){
 }
 function incoming(msg){
   const key=msg.to_type==="dm"?("dm:"+(msg.from===S.username?msg.to:msg.from)):("grp:"+msg.to);
-  if(S.current&&convoKey(S.current)===key){writeMsg(msg);scrollLog();}
-  else{S.unread[key]=(S.unread[key]||0)+1;renderSidebar();
-    if(msg.from!==S.username)toast("💬 "+msg.from+" : "+msg.body.slice(0,40));}
+  const isCurrent=S.current&&convoKey(S.current)===key;
+  if(isCurrent){writeMsg(msg);scrollLog();}
+  else{S.unread[key]=(S.unread[key]||0)+1;renderSidebar();}
+  if(msg.from!==S.username){
+    if(!isCurrent)toast("💬 "+msg.from+" : "+msg.body.slice(0,40));
+    if(!isCurrent||document.hidden){
+      const label=(msg.to_type==="group"?"👥 ":"💬 ")+msg.from;
+      notify(label,msg.body.slice(0,120)); beep();
+    }
+  }
 }
 function writeMsg(msg){
   const mine=msg.from===S.username;
@@ -493,6 +531,17 @@ function scrollLog(){const l=$("#log");l.scrollTop=l.scrollHeight;}
 function fmtTime(ts){const d=new Date(ts*1000);return d.getHours().toString().padStart(2,"0")+":"+d.getMinutes().toString().padStart(2,"0");}
 
 /* ---------- groups ---------- */
+function mergeGroup(g){
+  S.groups=S.groups.filter(x=>x.id!==g.id).concat([g]);
+  if(S.current&&S.current.type==="grp"&&S.current.id===g.id)
+    $("#chat-sub").textContent=g.members.join(", ");
+  renderSidebar();
+}
+$("#btn-gadd").onclick=()=>{
+  if(!S.current||S.current.type!=="grp")return;
+  const gid=S.current.id;
+  promptModal("➕ Ajouter au groupe","nom d'utilisateur",v=>{if(v)send("group_add",{group_id:gid,username:v})});
+};
 function newGroup(){
   const ov=overlay(`<div class="sheet modal-sm"><div class="sheet-head"><h2>👥 Nouveau groupe</h2></div>
     <input class="field" id="g-name" placeholder="Nom du groupe" style="margin-bottom:10px">
@@ -728,6 +777,170 @@ function renderDuel(){
   }
 }
 window.play=play;window.send=send;window.challenge=challenge;window.closeOverlays=closeOverlays;window.bet=bet;window.$=$;
+
+/* ---------- son + notifications ---------- */
+let audioCtx=null,ringTimer=null;
+function initAudio(){
+  try{
+    if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==="suspended")audioCtx.resume();
+  }catch(e){}
+}
+function beep(freq,dur){
+  if(!audioCtx)return;
+  freq=freq||660; dur=dur||0.15;
+  try{
+    const o=audioCtx.createOscillator(),g=audioCtx.createGain(),t=audioCtx.currentTime;
+    o.type="sine"; o.frequency.value=freq; o.connect(g); g.connect(audioCtx.destination);
+    g.gain.setValueAtTime(0.0001,t);
+    g.gain.exponentialRampToValueAtTime(0.22,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.start(t); o.stop(t+dur);
+  }catch(e){}
+}
+function startRing(){stopRing();const r=()=>{beep(880,0.18);setTimeout(()=>beep(660,0.18),220);};r();ringTimer=setInterval(r,1600);}
+function stopRing(){if(ringTimer){clearInterval(ringTimer);ringTimer=null;}}
+function notify(title,body){
+  try{
+    if(("Notification" in window)&&Notification.permission==="granted"&&document.hidden){
+      const n=new Notification(title,{body:body||"",tag:"papote"});
+      setTimeout(()=>{try{n.close()}catch(e){}},6000);
+    }
+  }catch(e){}
+}
+function enableNotifications(){
+  initAudio();
+  if(!("Notification" in window)){toast("Notifications non supportées ici.","err");return;}
+  if(Notification.permission==="granted"){toast("🔔 Notifications déjà actives.","ok");return;}
+  if(Notification.permission==="denied"){toast("Notifications bloquées — réautorise-les dans le navigateur.","err");return;}
+  Notification.requestPermission().then(p=>{
+    toast(p==="granted"?"🔔 Notifications activées !":"Notifications refusées.",p==="granted"?"ok":"err");
+  });
+}
+document.addEventListener("click",initAudio);
+
+/* ---------- appels vocaux (WebRTC pair-à-pair) ---------- */
+const ICE_SERVERS=[{urls:"stun:stun.l.google.com:19302"},{urls:"stun:stun1.l.google.com:19302"}];
+function callSupported(){return !!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&window.RTCPeerConnection);}
+function newPeer(peer){
+  const pc=new RTCPeerConnection({iceServers:ICE_SERVERS});
+  S.call={peer,pc,stream:null,status:"appel",muted:false};
+  pc.onicecandidate=e=>{if(e.candidate)send("call_ice",{to:peer,cand:JSON.stringify(e.candidate)});};
+  pc.ontrack=e=>{const a=$("#call-audio");if(a){a.srcObject=e.streams[0];a.play().catch(()=>{});}};
+  pc.onconnectionstatechange=()=>{
+    if(!S.call)return;
+    const st=pc.connectionState;
+    if(st==="connected"){S.call.status="connected";stopRing();updateCallUI();}
+    else if(st==="disconnected"){S.call.status="reconnexion";updateCallUI();}
+    else if(st==="failed"||st==="closed"){if(S.call){toast("Appel interrompu.","err");endCall(false);}}
+  };
+  return pc;
+}
+async function addLocalAudio(pc){
+  const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+  if(S.call)S.call.stream=stream;
+  stream.getTracks().forEach(t=>pc.addTrack(t,stream));
+}
+async function startCall(peer){
+  if(S.call||S.pendingCall){toast("Tu es déjà en appel.","err");return;}
+  if(!callSupported()){toast("Appels non supportés par ce navigateur.","err");return;}
+  if(!window.isSecureContext){toast("Les appels nécessitent l'URL https (le tunnel).","err");return;}
+  initAudio();
+  const pc=newPeer(peer);
+  showCallUI(peer,true);
+  try{await addLocalAudio(pc);}catch(e){toast("Micro inaccessible (autorise-le).","err");endCall(false);return;}
+  try{
+    const offer=await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    send("call_offer",{to:peer,sdp:JSON.stringify(offer)});
+  }catch(e){toast("Échec de l'appel.","err");endCall(false);}
+}
+function onCallIncoming(m){
+  if(S.call||S.pendingCall){send("call_decline",{to:m.from});return;}
+  if(!callSupported()){send("call_decline",{to:m.from});return;}
+  S.pendingCall=m; initAudio(); startRing();
+  notify("📞 Appel de "+m.from,"Appel vocal entrant"); toast("📞 "+m.from+" t'appelle…");
+  showIncomingUI(m.from);
+}
+async function acceptCall(){
+  const m=S.pendingCall; S.pendingCall=null; if(!m)return;
+  stopRing();
+  if(!window.isSecureContext){toast("Appels : ouvre l'URL https.","err");send("call_decline",{to:m.from});closeCallUI();return;}
+  const pc=newPeer(m.from);
+  S.call.status="connexion"; showCallUI(m.from,false);
+  try{await addLocalAudio(pc);}catch(e){toast("Micro inaccessible (autorise-le).","err");send("call_decline",{to:m.from});endCall(false);return;}
+  try{
+    await pc.setRemoteDescription(JSON.parse(m.sdp)); flushIce();
+    const ans=await pc.createAnswer();
+    await pc.setLocalDescription(ans);
+    send("call_answer",{to:m.from,sdp:JSON.stringify(ans)});
+  }catch(e){toast("Échec de la connexion.","err");endCall(true);}
+}
+function declineCall(){
+  const m=S.pendingCall; S.pendingCall=null; stopRing();
+  if(m)send("call_decline",{to:m.from});
+  closeCallUI();
+}
+async function onCallAnswered(m){
+  if(!S.call||S.call.peer!==m.from)return;
+  try{await S.call.pc.setRemoteDescription(JSON.parse(m.sdp)); flushIce(); S.call.status="connexion"; updateCallUI();}
+  catch(e){endCall(true);}
+}
+function onCallIce(m){
+  let cand; try{cand=JSON.parse(m.cand);}catch(e){return;}
+  if(S.call&&S.call.peer===m.from&&S.call.pc.remoteDescription){
+    S.call.pc.addIceCandidate(cand).catch(()=>{});
+  }else pendingIce.push({from:m.from,cand});
+}
+function flushIce(){
+  if(!S.call||!S.call.pc.remoteDescription)return;
+  const keep=[];
+  pendingIce.forEach(p=>{
+    if(p.from===S.call.peer)S.call.pc.addIceCandidate(p.cand).catch(()=>{});
+    else keep.push(p);
+  });
+  pendingIce=keep;
+}
+function endCall(tellPeer){
+  stopRing();
+  if(S.call){
+    if(tellPeer&&S.call.peer)send("call_end",{to:S.call.peer});
+    try{S.call.pc.close()}catch(e){}
+    if(S.call.stream){try{S.call.stream.getTracks().forEach(t=>t.stop())}catch(e){}}
+  }
+  S.call=null; pendingIce=[];
+  const a=$("#call-audio"); if(a)a.srcObject=null;
+  closeCallUI();
+}
+function showIncomingUI(from){
+  $("#call-ui").innerHTML=`<div class="overlay" style="z-index:100"><div class="sheet modal-sm" style="text-align:center">
+    <div style="font-size:54px" class="callpulse">📞</div><h2>Appel entrant</h2>
+    <div class="hint"><b>${esc(from)}</b> t'appelle…</div>
+    <div class="row center"><button class="btn green" id="ci-acc">Répondre</button>
+    <button class="btn pink" id="ci-dec">Refuser</button></div></div></div>`;
+  $("#ci-acc").onclick=acceptCall; $("#ci-dec").onclick=declineCall;
+}
+function showCallUI(peer,outgoing){
+  $("#call-ui").innerHTML=`<div class="overlay" style="z-index:100"><div class="sheet modal-sm" style="text-align:center">
+    <div style="font-size:54px">🎧</div><h2>${outgoing?"Appel…":"En appel"}</h2>
+    <div class="hint">avec <b>${esc(peer)}</b> — <span id="call-status">connexion…</span></div>
+    <div class="row center"><button class="btn ghost" id="call-mute">🔇 Muet</button>
+    <button class="btn pink" id="call-hang">📴 Raccrocher</button></div></div></div>`;
+  $("#call-hang").onclick=()=>endCall(true); $("#call-mute").onclick=toggleMute;
+  updateCallUI();
+}
+function updateCallUI(){
+  const s=$("#call-status"); if(!s||!S.call)return;
+  const map={appel:"sonne…",connexion:"connexion…",connected:"en ligne 🟢",reconnexion:"reconnexion…"};
+  s.textContent=map[S.call.status]||"…";
+}
+function toggleMute(){
+  if(!S.call||!S.call.stream)return;
+  S.call.muted=!S.call.muted;
+  S.call.stream.getAudioTracks().forEach(t=>t.enabled=!S.call.muted);
+  const b=$("#call-mute"); if(b)b.textContent=S.call.muted?"🔊 Activer":"🔇 Muet";
+}
+function closeCallUI(){const b=$("#call-ui");if(b)b.innerHTML="";}
 
 /* ---------- boot ---------- */
 setAuthMode("login");
