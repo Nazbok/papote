@@ -81,10 +81,59 @@ class DB:
                 delta INTEGER NOT NULL,
                 ts REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS servers(
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                owner INTEGER NOT NULL,
+                icon TEXT NOT NULL DEFAULT '',
+                created REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS server_members(
+                server_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                PRIMARY KEY (server_id, user_id)
+            );
+            CREATE TABLE IF NOT EXISTS channels(
+                id INTEGER PRIMARY KEY,
+                server_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL,            -- 'text' | 'voice'
+                position INTEGER NOT NULL DEFAULT 0,
+                created REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS call_log(
+                id INTEGER PRIMARY KEY,
+                caller INTEGER NOT NULL,
+                callee INTEGER NOT NULL,
+                started REAL NOT NULL,
+                duration REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL           -- 'answered' | 'missed' | 'declined'
+            );
+            CREATE TABLE IF NOT EXISTS reactions(
+                message_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                emoji TEXT NOT NULL,
+                PRIMARY KEY (message_id, user_id, emoji)
+            );
             """
         )
         self._migrate_casino()
+        self._migrate_profile()
+        self._migrate_messages()
         self.con.commit()
+
+    def _migrate_profile(self):
+        """Ajoute les colonnes de profil (photo, bio, couleur, bannière, statut)."""
+        cols = {r["name"] for r in self.con.execute("PRAGMA table_info(users)")}
+        for name in ("avatar", "bio", "accent", "banner", "status"):
+            if name not in cols:
+                self.con.execute(f"ALTER TABLE users ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
+
+    def _migrate_messages(self):
+        """Ajoute la colonne pièce jointe (image) aux messages si elle manque."""
+        cols = {r["name"] for r in self.con.execute("PRAGMA table_info(messages)")}
+        if "attachment" not in cols:
+            self.con.execute("ALTER TABLE messages ADD COLUMN attachment TEXT NOT NULL DEFAULT ''")
 
     def _migrate_casino(self):
         """Ajoute les colonnes casino à la table users si elles manquent."""
@@ -143,6 +192,55 @@ class DB:
         return self.con.execute(
             "SELECT * FROM users WHERE token=?", (token,)
         ).fetchone()
+
+    # --- profils ------------------------------------------------------------
+
+    def user_card(self, row_or_name):
+        """Carte publique légère d'un utilisateur (nom, photo, couleur)."""
+        r = row_or_name
+        if isinstance(r, str):
+            r = self.get_user(r)
+        if not r:
+            return None
+        return {"username": r["username"], "avatar": r["avatar"] or "",
+                "accent": r["accent"] or ""}
+
+    def get_profile(self, username: str):
+        r = self.get_user(username)
+        if not r:
+            return None
+        return {"username": r["username"], "avatar": r["avatar"] or "",
+                "bio": r["bio"] or "", "accent": r["accent"] or "",
+                "banner": r["banner"] or "", "status": r["status"] or "",
+                "created": r["created"]}
+
+    def update_profile(self, uid: int, avatar=None, bio=None, accent=None,
+                       banner=None, status=None):
+        r = self.get_user_by_id(uid)
+        if not r:
+            raise ValueError("Compte introuvable.")
+        if avatar is not None:
+            avatar = str(avatar)
+            if len(avatar) > 300_000:
+                raise ValueError("Photo de profil trop lourde (garde-la petite).")
+        if banner is not None:
+            banner = str(banner)
+            if len(banner) > 600_000:
+                raise ValueError("Bannière trop lourde (garde-la petite).")
+        if bio is not None:
+            bio = str(bio)[:500]
+        if accent is not None:
+            accent = str(accent).strip()[:32]
+        if status is not None:
+            status = str(status)[:80]
+        self.con.execute(
+            """UPDATE users SET avatar=COALESCE(?,avatar), bio=COALESCE(?,bio),
+               accent=COALESCE(?,accent), banner=COALESCE(?,banner),
+               status=COALESCE(?,status) WHERE id=?""",
+            (avatar, bio, accent, banner, status, uid),
+        )
+        self.con.commit()
+        return self.get_profile(r["username"])
 
     # --- amis ---------------------------------------------------------------
 
@@ -225,7 +323,8 @@ class DB:
                 kind = "outgoing"
             else:
                 kind = "incoming"
-            out.append({"username": other["username"], "kind": kind})
+            out.append({"username": other["username"], "kind": kind,
+                        "avatar": other["avatar"] or "", "accent": other["accent"] or ""})
         return out
 
     # --- groupes ------------------------------------------------------------
@@ -256,13 +355,16 @@ class DB:
         g = self.con.execute("SELECT * FROM groups WHERE id=?", (gid,)).fetchone()
         if not g:
             return None
-        members = [
-            self.get_user_by_id(r["user_id"])["username"]
+        cards = [
+            self.user_card(self.get_user_by_id(r["user_id"]))
             for r in self.con.execute(
                 "SELECT user_id FROM group_members WHERE group_id=?", (gid,)
             ).fetchall()
         ]
-        return {"id": g["id"], "name": g["name"], "owner": g["owner"], "members": members}
+        cards = [c for c in cards if c]
+        members = [c["username"] for c in cards]
+        return {"id": g["id"], "name": g["name"], "owner": g["owner"],
+                "members": members, "member_cards": cards}
 
     def is_group_member(self, gid: int, user_id: int) -> bool:
         return (
@@ -292,6 +394,21 @@ class DB:
         self.con.commit()
         return u["id"]
 
+    def add_group_members(self, gid: int, usernames):
+        """Ajoute plusieurs membres d'un coup ; ignore les inconnus. Renvoie les noms ajoutés."""
+        added = []
+        for uname in usernames:
+            u = self.get_user(str(uname).strip())
+            if not u:
+                continue
+            self.con.execute(
+                "INSERT OR IGNORE INTO group_members(group_id, user_id) VALUES(?,?)",
+                (gid, u["id"]),
+            )
+            added.append(u["username"])
+        self.con.commit()
+        return added
+
     def list_groups(self, user_id: int):
         rows = self.con.execute(
             """SELECT g.id FROM groups g
@@ -303,11 +420,12 @@ class DB:
 
     # --- messages -----------------------------------------------------------
 
-    def save_message(self, sender_id: int, to_type: str, to_id: int, body: str):
+    def save_message(self, sender_id: int, to_type: str, to_id: int, body: str,
+                     attachment: str = ""):
         ts = time.time()
         cur = self.con.execute(
-            "INSERT INTO messages(sender, to_type, to_id, body, ts) VALUES(?,?,?,?,?)",
-            (sender_id, to_type, to_id, body, ts),
+            "INSERT INTO messages(sender, to_type, to_id, body, ts, attachment) VALUES(?,?,?,?,?,?)",
+            (sender_id, to_type, to_id, body, ts, attachment or ""),
         )
         self.con.commit()
         sender = self.get_user_by_id(sender_id)["username"]
@@ -317,8 +435,13 @@ class DB:
             "to_type": to_type,
             "to_id": to_id,
             "body": body,
+            "attachment": attachment or "",
             "ts": ts,
         }
+
+    def get_message(self, mid: int):
+        r = self.con.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
+        return dict(r) if r else None
 
     def dm_history(self, user_id: int, other_id: int, limit: int = 100):
         rows = self.con.execute(
@@ -336,15 +459,204 @@ class DB:
         ).fetchall()
         return [self._msg_row(r) for r in reversed(rows)]
 
+    def channel_history(self, cid: int, limit: int = 100):
+        rows = self.con.execute(
+            "SELECT * FROM messages WHERE to_type='channel' AND to_id=? ORDER BY ts DESC LIMIT ?",
+            (cid, limit),
+        ).fetchall()
+        return [self._msg_row(r) for r in reversed(rows)]
+
     def _msg_row(self, r):
+        keys = r.keys() if hasattr(r, "keys") else []
         return {
             "id": r["id"],
             "from": self.get_user_by_id(r["sender"])["username"],
             "to_type": r["to_type"],
             "to_id": r["to_id"],
             "body": r["body"],
+            "attachment": (r["attachment"] if "attachment" in keys else "") or "",
+            "reactions": self.reactions_for(r["id"]),
             "ts": r["ts"],
         }
+
+    # --- réactions aux messages ---------------------------------------------
+
+    def toggle_reaction(self, mid: int, uid: int, emoji: str) -> bool:
+        """Ajoute ou retire une réaction. Renvoie True si ajoutée, False si retirée."""
+        emoji = str(emoji)[:16]
+        if not emoji:
+            raise ValueError("Réaction vide.")
+        existing = self.con.execute(
+            "SELECT 1 FROM reactions WHERE message_id=? AND user_id=? AND emoji=?",
+            (mid, uid, emoji),
+        ).fetchone()
+        if existing:
+            self.con.execute(
+                "DELETE FROM reactions WHERE message_id=? AND user_id=? AND emoji=?",
+                (mid, uid, emoji),
+            )
+            self.con.commit()
+            return False
+        self.con.execute(
+            "INSERT INTO reactions(message_id, user_id, emoji) VALUES(?,?,?)",
+            (mid, uid, emoji),
+        )
+        self.con.commit()
+        return True
+
+    def reactions_for(self, mid: int):
+        rows = self.con.execute(
+            "SELECT user_id, emoji FROM reactions WHERE message_id=?", (mid,)
+        ).fetchall()
+        by_emoji = {}
+        for r in rows:
+            u = self.get_user_by_id(r["user_id"])
+            if not u:
+                continue
+            by_emoji.setdefault(r["emoji"], []).append(u["username"])
+        return [{"emoji": e, "users": us} for e, us in by_emoji.items()]
+
+    # --- serveurs (communautés type Discord) --------------------------------
+
+    def create_server(self, name: str, owner_id: int, icon: str = ""):
+        name = name.strip()
+        if not name or len(name) > 40:
+            raise ValueError("Nom de serveur invalide.")
+        cur = self.con.execute(
+            "INSERT INTO servers(name, owner, icon, created) VALUES(?,?,?,?)",
+            (name, owner_id, (icon or "")[:64], time.time()),
+        )
+        sid = cur.lastrowid
+        self.con.execute(
+            "INSERT OR IGNORE INTO server_members(server_id, user_id) VALUES(?,?)",
+            (sid, owner_id),
+        )
+        # salons par défaut : un texte, un vocal (toujours ouvert)
+        now = time.time()
+        self.con.execute(
+            "INSERT INTO channels(server_id, name, kind, position, created) VALUES(?,?,?,?,?)",
+            (sid, "général", "text", 0, now),
+        )
+        self.con.execute(
+            "INSERT INTO channels(server_id, name, kind, position, created) VALUES(?,?,?,?,?)",
+            (sid, "Vocal", "voice", 1, now),
+        )
+        self.con.commit()
+        return self.get_server(sid)
+
+    def get_server(self, sid: int):
+        s = self.con.execute("SELECT * FROM servers WHERE id=?", (sid,)).fetchone()
+        if not s:
+            return None
+        members = [
+            self.user_card(self.get_user_by_id(r["user_id"]))
+            for r in self.con.execute(
+                "SELECT user_id FROM server_members WHERE server_id=?", (sid,)
+            ).fetchall()
+        ]
+        channels = [
+            {"id": c["id"], "name": c["name"], "kind": c["kind"], "position": c["position"]}
+            for c in self.con.execute(
+                "SELECT * FROM channels WHERE server_id=? ORDER BY position, id", (sid,)
+            ).fetchall()
+        ]
+        return {"id": s["id"], "name": s["name"], "owner": s["owner"],
+                "icon": s["icon"] or "", "members": [m for m in members if m],
+                "channels": channels}
+
+    def list_servers(self, user_id: int):
+        rows = self.con.execute(
+            """SELECT s.id FROM servers s
+               JOIN server_members m ON m.server_id=s.id
+               WHERE m.user_id=? ORDER BY s.created""",
+            (user_id,),
+        ).fetchall()
+        return [self.get_server(r["id"]) for r in rows]
+
+    def is_server_member(self, sid: int, user_id: int) -> bool:
+        return (
+            self.con.execute(
+                "SELECT 1 FROM server_members WHERE server_id=? AND user_id=?",
+                (sid, user_id),
+            ).fetchone()
+            is not None
+        )
+
+    def server_member_ids(self, sid: int):
+        return [
+            r["user_id"]
+            for r in self.con.execute(
+                "SELECT user_id FROM server_members WHERE server_id=?", (sid,)
+            ).fetchall()
+        ]
+
+    def add_server_members(self, sid: int, usernames):
+        added = []
+        for uname in usernames:
+            u = self.get_user(str(uname).strip())
+            if not u:
+                continue
+            self.con.execute(
+                "INSERT OR IGNORE INTO server_members(server_id, user_id) VALUES(?,?)",
+                (sid, u["id"]),
+            )
+            added.append(u["username"])
+        self.con.commit()
+        return added
+
+    def create_channel(self, sid: int, name: str, kind: str):
+        name = name.strip()
+        if not name or len(name) > 40:
+            raise ValueError("Nom de salon invalide.")
+        if kind not in ("text", "voice"):
+            raise ValueError("Type de salon inconnu.")
+        pos = self.con.execute(
+            "SELECT COALESCE(MAX(position),-1)+1 AS p FROM channels WHERE server_id=?", (sid,)
+        ).fetchone()["p"]
+        self.con.execute(
+            "INSERT INTO channels(server_id, name, kind, position, created) VALUES(?,?,?,?,?)",
+            (sid, name, kind, pos, time.time()),
+        )
+        self.con.commit()
+        return self.get_server(sid)
+
+    def get_channel(self, cid: int):
+        c = self.con.execute("SELECT * FROM channels WHERE id=?", (cid,)).fetchone()
+        if not c:
+            return None
+        return {"id": c["id"], "server_id": c["server_id"], "name": c["name"],
+                "kind": c["kind"]}
+
+    # --- journal des appels -------------------------------------------------
+
+    def log_call(self, caller_id: int, callee_id: int, started: float,
+                 duration: float, status: str):
+        self.con.execute(
+            "INSERT INTO call_log(caller, callee, started, duration, status) VALUES(?,?,?,?,?)",
+            (caller_id, callee_id, started, max(0, duration), status),
+        )
+        self.con.commit()
+
+    def call_history(self, uid: int, limit: int = 40):
+        rows = self.con.execute(
+            """SELECT * FROM call_log WHERE caller=? OR callee=?
+               ORDER BY started DESC LIMIT ?""",
+            (uid, uid, limit),
+        ).fetchall()
+        out = []
+        for r in rows:
+            outgoing = r["caller"] == uid
+            other = self.get_user_by_id(r["callee"] if outgoing else r["caller"])
+            if not other:
+                continue
+            out.append({
+                "with": other["username"],
+                "direction": "out" if outgoing else "in",
+                "status": r["status"],
+                "duration": r["duration"],
+                "ts": r["started"],
+            })
+        return out
 
     # --- casino -------------------------------------------------------------
 

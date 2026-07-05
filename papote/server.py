@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import signal
+import time
 from pathlib import Path
 
 import websockets
@@ -39,12 +40,17 @@ def _make_process_request(html: bytes):
 
 
 class Server:
-    def __init__(self, db: DB):
+    def __init__(self, db: DB, admins=None):
         self.db = db
+        self.admins = {a.strip() for a in (admins or []) if a.strip()}
+        self.sessions: dict = {}           # websocket -> {username, ip, xff, since, ua}
         self.online: dict[str, set] = {}   # username -> {websockets}
         self.blackjack: dict[int, dict] = {}  # user_id -> partie de blackjack en cours
         self.duels: dict[int, dict] = {}   # match_id -> duel entre amis
         self._match_seq = 0
+        self.voice: dict[int, set] = {}    # channel_id -> {usernames} présents en vocal
+        self.user_voice: dict[str, int] = {}  # username -> channel_id (un seul vocal à la fois)
+        self.calls: dict[tuple, dict] = {}  # (a,b) triés -> appel 1-à-1 en cours (pour le journal)
 
     # --- présence / envoi ---------------------------------------------------
 
@@ -60,6 +66,57 @@ class Server:
 
     def is_online(self, username) -> bool:
         return username in self.online
+
+    def is_admin(self, username) -> bool:
+        return username in self.admins
+
+    # --- métadonnées de connexion (IP, etc. — réservées à l'admin) ----------
+
+    def _session_meta(self, ws):
+        """Extrait IP + en-têtes utiles d'une connexion WebSocket."""
+        ip = ""
+        try:
+            addr = ws.remote_address
+            if addr:
+                ip = addr[0]
+        except Exception:
+            pass
+        xff = ua = ""
+        try:
+            headers = ws.request.headers
+            xff = (headers.get("CF-Connecting-IP") or headers.get("X-Forwarded-For")
+                   or headers.get("X-Real-IP") or "")
+            if xff and "," in xff:
+                xff = xff.split(",")[0].strip()
+            ua = headers.get("User-Agent", "")
+        except Exception:
+            pass
+        return {"username": None, "ip": ip, "xff": xff, "ua": ua, "since": time.time()}
+
+    def _admin_snapshot(self):
+        """Liste des sessions connectées avec IP + état (pour l'admin uniquement)."""
+        out = []
+        for ws, meta in self.sessions.items():
+            uname = meta.get("username")
+            if not uname:
+                continue
+            vc = self.user_voice.get(uname)
+            voice_label = ""
+            if vc is not None:
+                ch = self.db.get_channel(vc)
+                if ch:
+                    srv = self.db.get_server(ch["server_id"])
+                    voice_label = f"{srv['name']} / {ch['name']}" if srv else ch["name"]
+            out.append({
+                "username": uname,
+                "ip": meta.get("xff") or meta.get("ip") or "?",
+                "local_ip": meta.get("ip") or "",
+                "ua": meta.get("ua", ""),
+                "since": meta.get("since", 0),
+                "voice": voice_label,
+            })
+        out.sort(key=lambda s: s["username"].lower())
+        return out
 
     async def push(self, username: str, text: str):
         for ws in list(self.online.get(username, ())):
@@ -80,6 +137,19 @@ class Server:
         for f in friends:
             f["online"] = self.is_online(f["username"])
         return friends
+
+    def _annotate_server(self, s):
+        """Ajoute présence des membres + occupants des vocaux à un serveur."""
+        for m in s["members"]:
+            m["online"] = self.is_online(m["username"])
+        s["voice"] = {
+            str(ch["id"]): sorted(self.voice.get(ch["id"], set()))
+            for ch in s["channels"] if ch["kind"] == "voice"
+        }
+        return s
+
+    def _servers_payload(self, uid):
+        return [self._annotate_server(s) for s in self.db.list_servers(uid)]
 
     # --- authentification ---------------------------------------------------
 
@@ -104,12 +174,17 @@ class Server:
             return prev_user
 
         self._add_online(user["username"], ws)
+        if ws in self.sessions:
+            self.sessions[ws]["username"] = user["username"]
         await ws.send(protocol.ok(
             op,
             token=user["token"],
             username=user["username"],
+            is_admin=self.is_admin(user["username"]),
+            profile=self.db.get_profile(user["username"]),
             friends=self._friends_payload(user["id"]),
             groups=self.db.list_groups(user["id"]),
+            servers=self._servers_payload(user["id"]),
         ))
         await self.notify_presence(user, True)
         return user
@@ -163,11 +238,58 @@ class Server:
                 gid = int(req["group_id"])
                 if not self.db.is_group_member(gid, uid):
                     raise ValueError("Tu ne fais pas partie de ce groupe.")
-                self.db.add_group_member(gid, req["username"])
+                names = req.get("usernames")
+                if not names:
+                    names = [req["username"]]
+                self.db.add_group_members(gid, names)
                 group = self.db.get_group(gid)
                 for m in group["members"]:
                     await self.push(m, protocol.event("group_added", group=group))
                 await ws.send(protocol.ok(op, group=group))
+
+            elif op == "profile_get":
+                await self._handle_profile_get(ws, user, req)
+
+            elif op == "profile_update":
+                await self._handle_profile_update(ws, user, req)
+
+            elif op == "server_create":
+                server = self.db.create_server(req.get("name", ""), uid,
+                                               req.get("icon", ""))
+                await ws.send(protocol.ok(op, server=self._annotate_server(server),
+                                          servers=self._servers_payload(uid)))
+
+            elif op == "server_list":
+                await ws.send(protocol.ok(op, servers=self._servers_payload(uid)))
+
+            elif op == "server_add":
+                await self._handle_server_add(ws, user, req)
+
+            elif op == "channel_create":
+                await self._handle_channel_create(ws, user, req)
+
+            elif op == "voice_join":
+                await self._handle_voice_join(ws, user, req)
+
+            elif op == "voice_leave":
+                await self._leave_voice(uname, notify=True)
+                await ws.send(protocol.ok(op))
+
+            elif op == "voice_signal":
+                await self._handle_voice_signal(ws, user, req)
+
+            elif op == "call_history":
+                limit = min(int(req.get("limit", 40)), 100)
+                await ws.send(protocol.ok(op, calls=self.db.call_history(uid, limit)))
+
+            elif op == "react":
+                await self._handle_react(ws, user, req)
+
+            elif op == "admin_state":
+                if not self.is_admin(uname):
+                    await ws.send(protocol.err(op, "Réservé à l'administrateur."))
+                else:
+                    await ws.send(protocol.ok(op, sessions=self._admin_snapshot()))
 
             elif op == "send":
                 await self._handle_send(ws, user, req)
@@ -226,17 +348,26 @@ class Server:
 
             else:
                 await ws.send(protocol.err(op or "?", "Opération inconnue."))
-        except (KeyError, ValueError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             await ws.send(protocol.err(op or "?", str(e) or "Requête invalide."))
 
     async def _handle_send(self, ws, user, req):
         uid, uname = user["id"], user["username"]
         body = (req.get("body") or "").strip()
+        attachment = req.get("img") or ""
         to_type = req.get("to_type")
-        if not body:
-            return
         if len(body) > 4000:
             body = body[:4000]
+        if attachment:
+            if not isinstance(attachment, str) or not attachment.startswith("data:image/"):
+                await ws.send(protocol.err("send", "Image invalide."))
+                return
+            if len(attachment) > 1_000_000:
+                await ws.send(protocol.err("send", "Image trop lourde (max ~700 Ko)."))
+                return
+        if not body and not attachment:
+            return
+        avatar = self.db.user_card(user)["avatar"]
         if to_type == "dm":
             target = self.db.get_user(req.get("to", ""))
             if not target:
@@ -245,9 +376,10 @@ class Server:
             if not self.db.are_friends(uid, target["id"]):
                 await ws.send(protocol.err("send", "Vous n'êtes pas amis."))
                 return
-            saved = self.db.save_message(uid, "dm", target["id"], body)
+            saved = self.db.save_message(uid, "dm", target["id"], body, attachment)
             msg = {"id": saved["id"], "from": uname, "to_type": "dm",
-                   "to": target["username"], "body": body, "ts": saved["ts"]}
+                   "to": target["username"], "body": body, "attachment": attachment,
+                   "reactions": [], "avatar": avatar, "ts": saved["ts"]}
             ev = protocol.event("message", msg=msg)
             await self.push(target["username"], ev)
             await self.push(uname, ev)
@@ -256,14 +388,74 @@ class Server:
             if not self.db.is_group_member(gid, uid):
                 await ws.send(protocol.err("send", "Tu n'es pas dans ce groupe."))
                 return
-            saved = self.db.save_message(uid, "group", gid, body)
+            saved = self.db.save_message(uid, "group", gid, body, attachment)
             msg = {"id": saved["id"], "from": uname, "to_type": "group",
-                   "to": gid, "body": body, "ts": saved["ts"]}
+                   "to": gid, "body": body, "attachment": attachment,
+                   "reactions": [], "avatar": avatar, "ts": saved["ts"]}
             ev = protocol.event("message", msg=msg)
             for mid in self.db.group_member_ids(gid):
                 member = self.db.get_user_by_id(mid)
                 if member:
                     await self.push(member["username"], ev)
+        elif to_type == "channel":
+            cid = int(req.get("to"))
+            ch = self.db.get_channel(cid)
+            if not ch or ch["kind"] != "text":
+                await ws.send(protocol.err("send", "Salon introuvable."))
+                return
+            if not self.db.is_server_member(ch["server_id"], uid):
+                await ws.send(protocol.err("send", "Tu n'es pas membre de ce serveur."))
+                return
+            saved = self.db.save_message(uid, "channel", cid, body, attachment)
+            msg = {"id": saved["id"], "from": uname, "to_type": "channel",
+                   "to": cid, "body": body, "attachment": attachment,
+                   "reactions": [], "avatar": avatar, "ts": saved["ts"]}
+            ev = protocol.event("message", msg=msg)
+            for mid in self.db.server_member_ids(ch["server_id"]):
+                member = self.db.get_user_by_id(mid)
+                if member:
+                    await self.push(member["username"], ev)
+
+    def _message_audience(self, row):
+        """Usernames à notifier pour un message (selon dm/group/channel)."""
+        to_type, to_id = row["to_type"], row["to_id"]
+        if to_type == "dm":
+            names = []
+            for mid in (row["sender"], to_id):
+                u = self.db.get_user_by_id(mid)
+                if u:
+                    names.append(u["username"])
+            return names
+        if to_type == "group":
+            ids = self.db.group_member_ids(to_id)
+        elif to_type == "channel":
+            ch = self.db.get_channel(to_id)
+            ids = self.db.server_member_ids(ch["server_id"]) if ch else []
+        else:
+            ids = []
+        out = []
+        for mid in ids:
+            u = self.db.get_user_by_id(mid)
+            if u:
+                out.append(u["username"])
+        return out
+
+    async def _handle_react(self, ws, user, req):
+        mid = int(req.get("message_id", -1))
+        emoji = str(req.get("emoji", "")).strip()
+        row = self.db.get_message(mid)
+        if not row:
+            await ws.send(protocol.err("react", "Message introuvable."))
+            return
+        audience = self._message_audience(row)
+        if user["username"] not in audience:
+            await ws.send(protocol.err("react", "Accès refusé."))
+            return
+        self.db.toggle_reaction(mid, user["id"], emoji)
+        reactions = self.db.reactions_for(mid)
+        ev = protocol.event("reaction", message_id=mid, reactions=reactions)
+        for uname in audience:
+            await self.push(uname, ev)
 
     async def _handle_history(self, ws, user, req):
         uid = user["id"]
@@ -285,6 +477,15 @@ class Server:
             msgs = self.db.group_history(gid, limit)
             await ws.send(protocol.ok("history", with_type="group",
                                       **{"with": gid}, messages=msgs))
+        elif with_type == "channel":
+            cid = int(req.get("with"))
+            ch = self.db.get_channel(cid)
+            if not ch or not self.db.is_server_member(ch["server_id"], uid):
+                await ws.send(protocol.err("history", "Accès refusé."))
+                return
+            msgs = self.db.channel_history(cid, limit)
+            await ws.send(protocol.ok("history", with_type="channel",
+                                      **{"with": cid}, messages=msgs))
 
     async def _handle_casino_play(self, ws, user, req):
         uid = user["id"]
@@ -353,11 +554,168 @@ class Server:
     def _online_users(self, user):
         """Liste des utilisateurs en ligne (hors soi) avec leur relation."""
         rel = {f["username"]: f["kind"] for f in self.db.list_friends(user["id"])}
-        return [
-            {"username": uname, "relation": rel.get(uname, "none")}
-            for uname in sorted(self.online)
-            if uname != user["username"]
-        ]
+        out = []
+        for uname in sorted(self.online):
+            if uname == user["username"]:
+                continue
+            card = self.db.user_card(uname) or {"avatar": "", "accent": ""}
+            out.append({"username": uname, "relation": rel.get(uname, "none"),
+                        "avatar": card["avatar"], "accent": card["accent"]})
+        return out
+
+    # --- profils ------------------------------------------------------------
+
+    async def _handle_profile_get(self, ws, user, req):
+        name = str(req.get("username", "")).strip() or user["username"]
+        prof = self.db.get_profile(name)
+        if not prof:
+            await ws.send(protocol.err("profile_get", "Profil introuvable."))
+            return
+        prof["online"] = self.is_online(name)
+        await ws.send(protocol.ok("profile_get", profile=prof))
+
+    async def _handle_profile_update(self, ws, user, req):
+        prof = self.db.update_profile(
+            user["id"],
+            avatar=req.get("avatar"),
+            bio=req.get("bio"),
+            accent=req.get("accent"),
+            banner=req.get("banner"),
+            status=req.get("status"),
+        )
+        await ws.send(protocol.ok("profile_update", profile=prof))
+        # prévenir amis + serveurs pour rafraîchir la photo/couleur affichée
+        card = self.db.user_card(user)
+        ev = protocol.event("profile_updated", card=card)
+        seen = set()
+        for f in self.db.list_friends(user["id"]):
+            if f["kind"] == "friend":
+                seen.add(f["username"])
+        for s in self.db.list_servers(user["id"]):
+            for mid in self.db.server_member_ids(s["id"]):
+                m = self.db.get_user_by_id(mid)
+                if m and m["username"] != user["username"]:
+                    seen.add(m["username"])
+        for uname in seen:
+            await self.push(uname, ev)
+
+    # --- serveurs / salons --------------------------------------------------
+
+    async def _handle_server_add(self, ws, user, req):
+        sid = int(req.get("server_id", -1))
+        if not self.db.is_server_member(sid, user["id"]):
+            await ws.send(protocol.err("server_add", "Tu n'es pas membre de ce serveur."))
+            return
+        names = req.get("usernames") or ([req["username"]] if req.get("username") else [])
+        added = self.db.add_server_members(sid, names)
+        server = self._annotate_server(self.db.get_server(sid))
+        # membres déjà là : mise à jour ; nouveaux : invitation
+        for m in server["members"]:
+            ev = "server_added" if m["username"] in added else "server_updated"
+            await self.push(m["username"], protocol.event(ev, server=server))
+        await ws.send(protocol.ok("server_add", server=server, added=added))
+
+    async def _handle_channel_create(self, ws, user, req):
+        sid = int(req.get("server_id", -1))
+        if not self.db.is_server_member(sid, user["id"]):
+            await ws.send(protocol.err("channel_create", "Tu n'es pas membre de ce serveur."))
+            return
+        server = self.db.create_channel(sid, req.get("name", ""), req.get("kind", "text"))
+        server = self._annotate_server(server)
+        for mid in self.db.server_member_ids(sid):
+            m = self.db.get_user_by_id(mid)
+            if m:
+                await self.push(m["username"], protocol.event("server_updated", server=server))
+        await ws.send(protocol.ok("channel_create", server=server))
+
+    # --- salons vocaux (mesh WebRTC, toujours ouverts) ----------------------
+
+    async def _broadcast_voice_state(self, sid):
+        s = self.db.get_server(sid)
+        if not s:
+            return
+        rooms = {
+            str(ch["id"]): sorted(self.voice.get(ch["id"], set()))
+            for ch in s["channels"] if ch["kind"] == "voice"
+        }
+        ev = protocol.event("voice_state", server_id=sid, rooms=rooms)
+        for mid in self.db.server_member_ids(sid):
+            m = self.db.get_user_by_id(mid)
+            if m:
+                await self.push(m["username"], ev)
+
+    async def _handle_voice_join(self, ws, user, req):
+        uname = user["username"]
+        cid = int(req.get("channel_id", -1))
+        ch = self.db.get_channel(cid)
+        if not ch or ch["kind"] != "voice":
+            await ws.send(protocol.err("voice_join", "Salon vocal introuvable."))
+            return
+        if not self.db.is_server_member(ch["server_id"], user["id"]):
+            await ws.send(protocol.err("voice_join", "Tu n'es pas membre de ce serveur."))
+            return
+        await self._leave_voice(uname, notify=True)   # un seul vocal à la fois
+        peers = sorted(self.voice.get(cid, set()))
+        self.voice.setdefault(cid, set()).add(uname)
+        self.user_voice[uname] = cid
+        await ws.send(protocol.ok("voice_join", channel_id=cid,
+                                  server_id=ch["server_id"], peers=peers))
+        for p in peers:
+            await self.push(p, protocol.event("voice_peer_join",
+                                              channel_id=cid, username=uname))
+        await self._broadcast_voice_state(ch["server_id"])
+
+    async def _leave_voice(self, uname, notify=True):
+        cid = self.user_voice.pop(uname, None)
+        if cid is None:
+            return None
+        room = self.voice.get(cid)
+        remaining = []
+        if room is not None:
+            room.discard(uname)
+            remaining = list(room)
+            if not room:
+                self.voice.pop(cid, None)
+        if notify:
+            for p in remaining:
+                await self.push(p, protocol.event("voice_peer_leave",
+                                                  channel_id=cid, username=uname))
+            ch = self.db.get_channel(cid)
+            if ch:
+                await self._broadcast_voice_state(ch["server_id"])
+        return cid
+
+    async def _handle_voice_signal(self, ws, user, req):
+        uname = user["username"]
+        cid = int(req.get("channel_id", -1))
+        to = str(req.get("to", "")).strip()
+        if self.user_voice.get(uname) != cid or self.user_voice.get(to) != cid:
+            return
+        await self.push(to, protocol.event(
+            "voice_signal", channel_id=cid, kind=req.get("kind"),
+            data=req.get("data"), **{"from": uname}))
+
+    # --- journal des appels 1-à-1 -------------------------------------------
+
+    @staticmethod
+    def _call_pair(a, b):
+        return tuple(sorted((a, b)))
+
+    def _finalize_call(self, pair, declined=False):
+        rec = self.calls.pop(pair, None)
+        if not rec:
+            return
+        caller = self.db.get_user(rec["caller"])
+        callee = self.db.get_user(rec["callee"])
+        if not caller or not callee:
+            return
+        if declined:
+            status, dur = "declined", 0
+        elif rec["answered"]:
+            status, dur = "answered", time.time() - rec["answer_ts"]
+        else:
+            status, dur = "missed", 0
+        self.db.log_call(caller["id"], callee["id"], rec["offer_ts"], dur, status)
 
     # --- duels entre amis (jeux multijoueur + paris) ------------------------
 
@@ -566,6 +924,19 @@ class Server:
         if op == "call_offer" and not self.is_online(to_name):
             await ws.send(protocol.err(op, f"{to_name} n'est pas en ligne."))
             return
+        pair = self._call_pair(uname, to_name)
+        if op == "call_offer":
+            self.calls[pair] = {"caller": uname, "callee": to_name,
+                                "offer_ts": time.time(), "answered": False, "answer_ts": 0}
+        elif op == "call_answer":
+            rec = self.calls.get(pair)
+            if rec and not rec["answered"]:
+                rec["answered"] = True
+                rec["answer_ts"] = time.time()
+        elif op == "call_decline":
+            self._finalize_call(pair, declined=True)
+        elif op == "call_end":
+            self._finalize_call(pair)
         payload = {"from": uname}
         if "sdp" in req:
             payload["sdp"] = req["sdp"]
@@ -577,6 +948,7 @@ class Server:
 
     async def handler(self, ws):
         user = None
+        self.sessions[ws] = self._session_meta(ws)
         try:
             async for raw in ws:
                 try:
@@ -595,17 +967,27 @@ class Server:
         except websockets.WebSocketException:
             pass
         finally:
+            self.sessions.pop(ws, None)
             if user is not None:
                 self._remove_online(user["username"], ws)
                 if not self.is_online(user["username"]):
+                    uname = user["username"]
                     self.blackjack.pop(user["id"], None)
-                    await self._abandon_duels(user["username"])
+                    await self._abandon_duels(uname)
+                    await self._leave_voice(uname, notify=True)
+                    for pair in [p for p in self.calls if uname in p]:
+                        other = pair[0] if pair[1] == uname else pair[1]
+                        self._finalize_call(pair)
+                        await self.push(other, protocol.event("call_ended",
+                                                              **{"from": uname}))
                     await self.notify_presence(user, False)
 
 
-async def _amain(host, port, db_path):
+async def _amain(host, port, db_path, admins):
     db = DB(db_path) if db_path else DB()
-    server = Server(db)
+    server = Server(db, admins=admins)
+    if server.admins:
+        print(f"  admin(s) : {', '.join(sorted(server.admins))}", flush=True)
     stop = asyncio.get_running_loop().create_future()
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -613,7 +995,7 @@ async def _amain(host, port, db_path):
     except (NotImplementedError, RuntimeError):
         pass
     process_request = _make_process_request(_load_webclient())
-    async with websockets.serve(server.handler, host, port, max_size=2 ** 20,
+    async with websockets.serve(server.handler, host, port, max_size=4 * 2 ** 20,
                                 process_request=process_request):
         print(f"papote-server à l'écoute sur ws://{host}:{port}  (db: {db.path})", flush=True)
         print(f"  client web : http://{host}:{port}/", flush=True)
@@ -622,13 +1004,19 @@ async def _amain(host, port, db_path):
 
 
 def main():
+    import os
     ap = argparse.ArgumentParser(prog="papote-server", description="Serveur de messagerie papote")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--db", default=None, help="chemin de la base SQLite")
+    ap.add_argument("--admin", default=None,
+                    help="compte(s) admin autorisés à voir les IP (séparés par des virgules ; "
+                         "défaut : $PAPOTE_ADMIN ou 'sana')")
     args = ap.parse_args()
+    raw = args.admin if args.admin is not None else os.environ.get("PAPOTE_ADMIN", "sana")
+    admins = [a for a in raw.split(",") if a.strip()]
     try:
-        asyncio.run(_amain(args.host, args.port, args.db))
+        asyncio.run(_amain(args.host, args.port, args.db, admins))
     except KeyboardInterrupt:
         pass
 
