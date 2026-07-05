@@ -3,7 +3,23 @@
 Une messagerie pour le **terminal** : un serveur, un client avec une interface
 [Textual](https://textual.textualize.io/), et tout passe par WebSocket.
 
-Messages privés, groupes, demandes d'ami, présence en ligne, historique.
+Messages privés, groupes, demandes d'ami, présence en ligne, historique…
+et un **casino** avec de la monnaie virtuelle et un classement 🎰.
+
+## 🎰 Casino
+
+Chaque compte démarre avec **1000 jetons**. Ouvre le casino depuis la barre
+latérale (bouton **🎰 Casino** ou `Ctrl+J`) :
+
+| Jeu | Comment | Gain |
+|-----|---------|------|
+| 🪙 Pile ou Face | choisis pile ou face | ×2 |
+| 🎲 Dés | devine le résultat (1-6) | ×6 |
+| 🎰 Machine à sous | trois rouleaux | jusqu'à ×30 (💎💎💎) |
+
+Le **classement** (bouton 🏆 ou `Ctrl+P`) montre les plus gros portefeuilles de
+tous les joueurs. À court de jetons ? Le bouton **🎁 Bonus** te redonne 100
+jetons quand tu es fauché. Tout le hasard et les soldes sont gérés côté serveur.
 
 ## Installation
 
@@ -51,8 +67,9 @@ ajouté automatiquement).
 
 | Fichier | Rôle |
 |---------|------|
-| `papote/server.py`   | serveur WebSocket : comptes, amis, groupes, relai des messages |
+| `papote/server.py`   | serveur WebSocket : comptes, amis, groupes, relai des messages, casino |
 | `papote/client.py`   | interface terminal (Textual) |
-| `papote/db.py`       | stockage SQLite |
+| `papote/db.py`       | stockage SQLite (messages + soldes du casino) |
+| `papote/casino.py`   | logique des jeux de casino (aléatoire côté serveur) |
 | `papote/protocol.py` | format des messages JSON échangés |
 | `papote/net.py`      | connexion WebSocket + config côté client |

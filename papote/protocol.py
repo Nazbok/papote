@@ -13,6 +13,10 @@ Requêtes client -> serveur (champ "op") :
   group_add         {group_id, username}
   send              {to_type:"dm"|"group", to:username|group_id, body}
   history           {with_type, with, limit?}
+  casino_state      {}
+  casino_play       {game:"coinflip"|"dice"|"slots", bet, choice?}
+  casino_bonus      {}
+  leaderboard       {limit?}
 
 Réponses serveur -> client :
   {"ok":true, "reply":<op>, ...}   ou   {"ok":false, "reply":<op>, "error":"..."}

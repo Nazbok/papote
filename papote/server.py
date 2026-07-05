@@ -8,7 +8,7 @@ import signal
 
 import websockets
 
-from . import DEFAULT_PORT, protocol
+from . import DEFAULT_PORT, casino, protocol
 from .db import DB
 
 
@@ -146,6 +146,20 @@ class Server:
             elif op == "history":
                 await self._handle_history(ws, user, req)
 
+            elif op == "casino_state":
+                await ws.send(protocol.ok(op, **self.db.casino_state(uid)))
+
+            elif op == "casino_play":
+                await self._handle_casino_play(ws, user, req)
+
+            elif op == "casino_bonus":
+                balance = self.db.claim_bonus(uid)
+                await ws.send(protocol.ok(op, balance=balance))
+
+            elif op == "leaderboard":
+                limit = min(int(req.get("limit", 20)), 100)
+                await ws.send(protocol.ok(op, players=self.db.leaderboard(limit)))
+
             else:
                 await ws.send(protocol.err(op or "?", "Opération inconnue."))
         except (KeyError, ValueError) as e:
@@ -207,6 +221,28 @@ class Server:
             msgs = self.db.group_history(gid, limit)
             await ws.send(protocol.ok("history", with_type="group",
                                       **{"with": gid}, messages=msgs))
+
+    async def _handle_casino_play(self, ws, user, req):
+        uid = user["id"]
+        try:
+            bet = int(req.get("bet", 0))
+        except (TypeError, ValueError):
+            await ws.send(protocol.err("casino_play", "Mise invalide."))
+            return
+        if bet <= 0:
+            await ws.send(protocol.err("casino_play", "La mise doit être positive."))
+            return
+        state = self.db.casino_state(uid)
+        if bet > state["balance"]:
+            await ws.send(protocol.err("casino_play", "Solde insuffisant pour cette mise."))
+            return
+        try:
+            outcome = casino.resolve(req.get("game", ""), bet, req.get("choice"))
+        except ValueError as e:
+            await ws.send(protocol.err("casino_play", str(e)))
+            return
+        balance = self.db.apply_casino_result(uid, outcome["delta"])
+        await ws.send(protocol.ok("casino_play", bet=bet, balance=balance, **outcome))
 
     # --- boucle par connexion ----------------------------------------------
 

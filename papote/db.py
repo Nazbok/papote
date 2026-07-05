@@ -17,6 +17,11 @@ DEFAULT_DB = (
 
 _PBKDF_ROUNDS = 120_000
 
+# Casino
+STARTING_BALANCE = 1000      # jetons offerts à l'inscription
+BONUS_AMOUNT = 100           # jetons du bonus anti-faillite
+BONUS_THRESHOLD = 100        # bonus réclamable seulement en dessous de ce solde
+
 
 def _hash_pw(password: str, salt: bytes) -> bytes:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, _PBKDF_ROUNDS)
@@ -69,7 +74,20 @@ class DB:
             );
             """
         )
+        self._migrate_casino()
         self.con.commit()
+
+    def _migrate_casino(self):
+        """Ajoute les colonnes casino à la table users si elles manquent."""
+        cols = {r["name"] for r in self.con.execute("PRAGMA table_info(users)")}
+        additions = [
+            ("balance", f"INTEGER NOT NULL DEFAULT {STARTING_BALANCE}"),
+            ("biggest_win", "INTEGER NOT NULL DEFAULT 0"),
+            ("games_played", "INTEGER NOT NULL DEFAULT 0"),
+        ]
+        for name, ddl in additions:
+            if name not in cols:
+                self.con.execute(f"ALTER TABLE users ADD COLUMN {name} {ddl}")
 
     # --- utilisateurs -------------------------------------------------------
 
@@ -318,3 +336,57 @@ class DB:
             "body": r["body"],
             "ts": r["ts"],
         }
+
+    # --- casino -------------------------------------------------------------
+
+    def casino_state(self, uid: int) -> dict:
+        r = self.get_user_by_id(uid)
+        return {
+            "balance": r["balance"],
+            "biggest_win": r["biggest_win"],
+            "games_played": r["games_played"],
+        }
+
+    def apply_casino_result(self, uid: int, delta: int) -> int:
+        """Applique le gain/perte d'une partie et renvoie le nouveau solde.
+
+        Le solde ne descend jamais sous zéro. Met à jour le record de gain et
+        le compteur de parties de façon atomique.
+        """
+        r = self.get_user_by_id(uid)
+        new_balance = max(0, r["balance"] + delta)
+        biggest = max(r["biggest_win"], delta)
+        self.con.execute(
+            "UPDATE users SET balance=?, biggest_win=?, games_played=games_played+1 WHERE id=?",
+            (new_balance, biggest, uid),
+        )
+        self.con.commit()
+        return new_balance
+
+    def claim_bonus(self, uid: int) -> int:
+        """Crédite le bonus anti-faillite ; refuse si le solde est trop élevé."""
+        r = self.get_user_by_id(uid)
+        if r["balance"] >= BONUS_THRESHOLD:
+            raise ValueError(
+                f"Bonus réservé aux fauchés (moins de {BONUS_THRESHOLD} jetons)."
+            )
+        new_balance = r["balance"] + BONUS_AMOUNT
+        self.con.execute("UPDATE users SET balance=? WHERE id=?", (new_balance, uid))
+        self.con.commit()
+        return new_balance
+
+    def leaderboard(self, limit: int = 20):
+        rows = self.con.execute(
+            """SELECT username, balance, biggest_win, games_played
+               FROM users ORDER BY balance DESC, biggest_win DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                "username": r["username"],
+                "balance": r["balance"],
+                "biggest_win": r["biggest_win"],
+                "games_played": r["games_played"],
+            }
+            for r in rows
+        ]

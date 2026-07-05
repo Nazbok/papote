@@ -123,12 +123,129 @@ class NewGroupModal(ModalScreen):
             self.dismiss(None)
 
 
+# --- Casino ------------------------------------------------------------------
+
+class CasinoScreen(ModalScreen):
+    BINDINGS = [("escape", "close", "Fermer")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="casino-box"):
+            yield Static("🎰  C A S I N O", id="casino-title")
+            yield Static("", id="casino-balance")
+            yield Input(value="100", placeholder="mise", id="casino-bet", type="integer")
+            with Horizontal(classes="casino-row"):
+                yield Button("🪙 Pile", id="cf-pile")
+                yield Button("🪙 Face", id="cf-face")
+            with Horizontal(classes="casino-row"):
+                yield Input(value="6", id="dice-num", type="integer")
+                yield Button("🎲 Lancer le dé (×6)", id="dice-roll")
+            with Horizontal(classes="casino-row"):
+                yield Button("🎰 Machine à sous", variant="success", id="slots")
+            with Horizontal(classes="casino-row"):
+                yield Button("🎁 Bonus", id="bonus")
+                yield Button("🏆 Classement", id="board")
+                yield Button("✖ Fermer", id="close")
+            yield RichLog(id="casino-log", markup=True, wrap=True)
+
+    def on_mount(self) -> None:
+        self.app.net_send(op="casino_state")
+        self.refresh_balance()
+        log = self.query_one("#casino-log", RichLog)
+        log.write("[dim]Mise tes jetons et tente ta chance ![/dim]")
+        log.write("[dim]Pile ou Face ×2  ·  Dé ×6  ·  Machine à sous jusqu'à ×30[/dim]")
+
+    def refresh_balance(self) -> None:
+        self.query_one("#casino-balance", Static).update(
+            f"Solde : [b yellow]{self.app.balance}[/b yellow] jetons"
+        )
+
+    def _bet(self) -> int:
+        try:
+            return int(self.query_one("#casino-bet", Input).value)
+        except ValueError:
+            return 0
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id
+        if bid == "close":
+            self.dismiss(None)
+        elif bid == "board":
+            self.app.open_leaderboard()
+        elif bid == "bonus":
+            self.app.net_send(op="casino_bonus")
+        elif bid == "cf-pile":
+            self.app.net_send(op="casino_play", game="coinflip", bet=self._bet(), choice="pile")
+        elif bid == "cf-face":
+            self.app.net_send(op="casino_play", game="coinflip", bet=self._bet(), choice="face")
+        elif bid == "dice-roll":
+            num = self.query_one("#dice-num", Input).value.strip()
+            self.app.net_send(op="casino_play", game="dice", bet=self._bet(), choice=num)
+        elif bid == "slots":
+            self.app.net_send(op="casino_play", game="slots", bet=self._bet())
+
+    # --- retours du serveur (appelés par l'app) ---------------------------
+
+    def on_result(self, msg: dict) -> None:
+        self.refresh_balance()
+        log = self.query_one("#casino-log", RichLog)
+        delta = msg.get("delta", 0)
+        detail = escape(str(msg.get("detail", "")))
+        if msg.get("won"):
+            log.write(f"[green]✔[/green] {detail}   [b green]{delta:+d}[/b green] jetons")
+        else:
+            log.write(f"[red]✘[/red] {detail}   [b red]{delta:+d}[/b red] jetons")
+
+    def on_bonus(self) -> None:
+        self.refresh_balance()
+        self.query_one("#casino-log", RichLog).write(
+            "[b magenta]🎁 Bonus encaissé ![/b magenta] Rejoue !"
+        )
+
+
+class LeaderboardScreen(ModalScreen):
+    BINDINGS = [("escape", "close", "Fermer")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="board-box"):
+            yield Static("🏆  Classement du casino", id="board-title")
+            yield RichLog(id="board-log", markup=True, wrap=True)
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Fermer", variant="primary", id="close")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(None)
+
+    def show(self, players: list) -> None:
+        log = self.query_one("#board-log", RichLog)
+        log.clear()
+        if not players:
+            log.write("[dim]Personne n'a encore joué.[/dim]")
+            return
+        medals = {0: "🥇", 1: "🥈", 2: "🥉"}
+        for i, p in enumerate(players):
+            rank = medals.get(i, f"[dim]{i + 1}.[/dim]")
+            me = " [b cyan](toi)[/b cyan]" if p["username"] == self.app.username else ""
+            log.write(
+                f"{rank} [b]{escape(p['username'])}[/b]{me} — "
+                f"[yellow]{p['balance']}[/yellow] jetons   "
+                f"[dim](record {p['biggest_win']:+d}, {p['games_played']} parties)[/dim]"
+            )
+
+
 # --- Écran principal ---------------------------------------------------------
 
 class MainScreen(Screen):
     BINDINGS = [
         ("ctrl+a", "add_friend", "Ajouter un ami"),
         ("ctrl+g", "new_group", "Nouveau groupe"),
+        ("ctrl+j", "casino", "🎰 Casino"),
+        ("ctrl+p", "leaderboard", "🏆 Classement"),
         ("ctrl+q", "quit", "Quitter"),
     ]
 
@@ -141,6 +258,9 @@ class MainScreen(Screen):
                 with Horizontal(id="side-buttons"):
                     yield Button("➕ Ami", variant="primary", id="btn-add")
                     yield Button("👥 Groupe", id="btn-group")
+                with Horizontal(id="side-buttons2"):
+                    yield Button("🎰 Casino", variant="success", id="btn-casino")
+                    yield Button("🏆", id="btn-board")
             with Vertical(id="chat-pane"):
                 yield Static(" Choisis une conversation à gauche", id="chat-header")
                 yield RichLog(id="log", wrap=True, markup=True, highlight=False)
@@ -156,11 +276,21 @@ class MainScreen(Screen):
     def action_new_group(self) -> None:
         self.app.push_screen(NewGroupModal(), self.app.on_new_group)
 
+    def action_casino(self) -> None:
+        self.app.open_casino()
+
+    def action_leaderboard(self) -> None:
+        self.app.open_leaderboard()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-add":
             self.action_add_friend()
         elif event.button.id == "btn-group":
             self.action_new_group()
+        elif event.button.id == "btn-casino":
+            self.action_casino()
+        elif event.button.id == "btn-board":
+            self.action_leaderboard()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         convo = getattr(event.item, "convo", None)
@@ -192,7 +322,8 @@ class PapoteApp(App):
     #sidebar-pane { width: 34; border-right: solid $accent; }
     #side-title { background: $accent; color: $text; text-style: bold; }
     #sidebar { height: 1fr; background: $surface; }
-    #side-buttons { height: auto; align: center middle; padding: 1 0; }
+    #side-buttons { height: auto; align: center middle; padding: 1 0 0 0; }
+    #side-buttons2 { height: auto; align: center middle; padding: 1 0; }
     #chat-pane { width: 1fr; }
     #chat-header { background: $boost; text-style: bold; height: 1; }
     #log { height: 1fr; background: $surface; padding: 0 1; }
@@ -203,6 +334,18 @@ class PapoteApp(App):
     .modal-title { text-style: bold; color: $accent; padding-bottom: 1; }
     .modal-buttons { height: auto; align: center middle; padding-top: 1; }
     Button { margin: 0 1; }
+
+    CasinoScreen, LeaderboardScreen { align: center middle; }
+    #casino-box { width: 72; height: auto; border: round $success; padding: 1 2; background: $panel; }
+    #casino-title { text-align: center; text-style: bold; color: $success; }
+    #casino-balance { text-align: center; padding-bottom: 1; }
+    .casino-row { height: auto; align: center middle; padding-top: 1; }
+    #casino-bet { width: 20; }
+    #dice-num { width: 8; }
+    #casino-log { height: 9; background: $surface; margin-top: 1; padding: 0 1; }
+    #board-box { width: 72; height: auto; border: round $warning; padding: 1 2; background: $panel; }
+    #board-title { text-align: center; text-style: bold; color: $warning; padding-bottom: 1; }
+    #board-log { height: 16; background: $surface; padding: 0 1; }
     """
 
     def __init__(self, server_arg=None):
@@ -214,8 +357,11 @@ class PapoteApp(App):
         self.current = None
         self.unread = {}
         self._server_arg = server_arg
-        self.login = None   # référence à l'écran de connexion
-        self.main = None    # référence à l'écran principal
+        self.login = None    # référence à l'écran de connexion
+        self.main = None     # référence à l'écran principal
+        self.balance = 0     # solde de jetons du casino
+        self.casino = None   # référence à l'écran casino (si ouvert)
+        self.board = None    # référence à l'écran classement (si ouvert)
 
     def on_mount(self) -> None:
         self.login = LoginScreen()
@@ -262,6 +408,7 @@ class PapoteApp(App):
         self.main = MainScreen()
         await self.switch_screen(self.main)
         self.refresh_sidebar()
+        self.net_send(op="casino_state")
         self._receiver()
 
     def _login_status(self, text: str) -> None:
@@ -336,6 +483,21 @@ class PapoteApp(App):
                 log.clear()
                 for m in msg["messages"]:
                     self._write_message(m)
+        elif reply == "casino_state":
+            self.balance = msg.get("balance", self.balance)
+            if self.casino:
+                self.casino.refresh_balance()
+        elif reply == "casino_play":
+            self.balance = msg.get("balance", self.balance)
+            if self.casino:
+                self.casino.on_result(msg)
+        elif reply == "casino_bonus":
+            self.balance = msg.get("balance", self.balance)
+            if self.casino:
+                self.casino.on_bonus()
+        elif reply == "leaderboard":
+            if self.board:
+                self.board.show(msg.get("players", []))
 
     def _incoming_message(self, m: dict) -> None:
         if m["to_type"] == "dm":
@@ -403,6 +565,19 @@ class PapoteApp(App):
             name, members = result
             if name:
                 self.net_send(op="group_create", name=name, members=members)
+
+    # --- casino -------------------------------------------------------------
+
+    def open_casino(self) -> None:
+        if not self.main:
+            return
+        self.casino = CasinoScreen()
+        self.push_screen(self.casino, lambda _=None: setattr(self, "casino", None))
+
+    def open_leaderboard(self) -> None:
+        self.board = LeaderboardScreen()
+        self.push_screen(self.board, lambda _=None: setattr(self, "board", None))
+        self.net_send(op="leaderboard")
 
     # --- barre latérale -----------------------------------------------------
 
