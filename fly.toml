@@ -1,0 +1,30 @@
+# Déploiement Fly.io de papote (voir DEPLOY.md).
+# `fly launch` peut régénérer ce fichier ; les points importants sont conservés
+# ci-dessous : volume persistant pour la base, machine toujours allumée, https.
+
+app = "papote"
+primary_region = "cdg"   # Paris ; change selon toi (fly platform regions)
+
+[build]
+
+[env]
+  PORT = "8080"
+  PAPOTE_ADMIN = "sana"
+  PAPOTE_DB = "/data/server.db"
+
+# Volume persistant : la base SQLite survit aux redéploiements/redémarrages.
+# À créer une fois : fly volumes create papote_data --size 1 --region cdg
+[[mounts]]
+  source = "papote_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true          # redirige http -> https (micro/vocal exigent https)
+  auto_stop_machines = false  # un chat doit rester joignable en permanence
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

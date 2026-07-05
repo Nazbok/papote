@@ -1006,9 +1006,12 @@ async def _amain(host, port, db_path, admins):
 def main():
     import os
     ap = argparse.ArgumentParser(prog="papote-server", description="Serveur de messagerie papote")
-    ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
-    ap.add_argument("--db", default=None, help="chemin de la base SQLite")
+    ap.add_argument("--host", default=os.environ.get("HOST", "0.0.0.0"),
+                    help="interface d'écoute (défaut : $HOST ou 0.0.0.0)")
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", DEFAULT_PORT)),
+                    help="port d'écoute (défaut : $PORT ou 8765) — les hébergeurs le fixent")
+    ap.add_argument("--db", default=os.environ.get("PAPOTE_DB"),
+                    help="chemin de la base SQLite (défaut : $PAPOTE_DB, sinon dossier de données XDG)")
     ap.add_argument("--admin", default=None,
                     help="compte(s) admin autorisés à voir les IP (séparés par des virgules ; "
                          "défaut : $PAPOTE_ADMIN ou 'sana')")

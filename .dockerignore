@@ -1,0 +1,13 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.py[cod]
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+*.log
+tests/
+config.json
+.DS_Store

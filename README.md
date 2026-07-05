@@ -170,6 +170,10 @@ Cloudflare renvoie une URL `https://xxxx.trycloudflare.com` : donne-la à ton
 correspondant, qui la saisit comme **serveur** dans son client (le `wss://` est
 ajouté automatiquement).
 
+Le tunnel est **temporaire** (l'URL change à chaque lancement). Pour une **URL
+permanente en ligne 24/7** (Fly.io, VPS + Caddy, Railway…), voir
+**[DEPLOY.md](DEPLOY.md)** : le dépôt contient déjà `Dockerfile` et `fly.toml`.
+
 ## Architecture
 
 | Fichier | Rôle |
