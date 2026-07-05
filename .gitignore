@@ -1,0 +1,19 @@
+# Environnement Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Base de données locale du serveur
+*.db
+*.sqlite
+*.sqlite3
+
+# Config locale du client
+config.json
+
+# Divers
+.DS_Store
+*.log
