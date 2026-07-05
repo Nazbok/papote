@@ -351,7 +351,6 @@ input{font-family:inherit}
     <div class="chip" id="me-chip" style="cursor:pointer" title="Mon profil">👤 <span id="me-name"></span></div>
     <div class="chip coins">🪙 <span id="me-balance">0</span></div>
     <div class="spacer"></div>
-    <button class="iconbtn" id="nav-admin" title="Admin : connectés + IP" style="display:none">🛡️</button>
     <button class="iconbtn" id="nav-calls" title="Historique des appels">📞</button>
     <button class="iconbtn" id="nav-notif" title="Activer les notifications">🔔</button>
     <button class="iconbtn" id="nav-online" title="En ligne">🌐</button>
@@ -417,8 +416,12 @@ const S={ws:null,token:store.get("papote_token"),username:"",balance:0,
   friends:[],groups:[],servers:[],current:null,unread:{},duel:null,connected:false,
   reconnectTimer:null,delay:600,authMode:"login",pendingInvite:null,
   call:null,pendingCall:null,profile:{},profiles:{},voice:null,
-  view:"home",activeServer:null,isAdmin:false,reactions:{}};
+  view:"home",activeServer:null,reactions:{}};
 let pendingIce=[];
+
+/* ---------- point d'extension local (remplacé si un module est présent) ---------- */
+function extMsg(m){}
+function extReady(){}
 
 /* ---------- cache des cartes de profil (photo + couleur) ---------- */
 function cacheCard(c){
@@ -472,7 +475,7 @@ function send(op,extra){
 }
 
 /* ---------- routing ---------- */
-function route(m){ if(m.ev) onEvent(m); else if(m.reply) onReply(m); }
+function route(m){ extMsg(m); if(m.ev) onEvent(m); else if(m.reply) onReply(m); }
 
 function onReply(m){
   if(!m.ok){
@@ -490,7 +493,6 @@ function onReply(m){
       S.token=m.token; store.set("papote_token",m.token);
       S.username=m.username; S.friends=m.friends||[]; S.groups=m.groups||[];
       S.servers=m.servers||[]; S.profile=m.profile||{username:m.username};
-      S.isAdmin=!!m.is_admin;
       cacheCard(S.profile); cacheAll(S.friends);
       S.servers.forEach(s=>cacheAll(s.members));
       enterApp(); send("casino_state"); break;
@@ -506,7 +508,6 @@ function onReply(m){
     case "channel_create": if(m.server){mergeServer(m.server);toast("✅ Salon créé","ok");closeOverlays();} break;
     case "voice_join": onVoiceJoined(m); break;
     case "call_history": renderCallHistory(m.calls||[]); break;
-    case "admin_state": renderAdmin(m.sessions||[]); break;
     case "history":
       renderHistory(m); break;
     case "casino_state": setBalance(m.balance); break;
@@ -584,7 +585,7 @@ function showLogin(){$("#app").classList.add("hidden");$("#login").classList.rem
 function enterApp(){
   $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
   $("#me-name").textContent=S.username;
-  $("#nav-admin").style.display=S.isAdmin?"":"none";
+  extReady();
   if(S.view==="server"&&S.servers.some(s=>s.id===S.activeServer))openServer(S.activeServer);
   else goHome();
   initAudio();
@@ -597,7 +598,6 @@ function setBalance(b){ if(typeof b==="number"){S.balance=b; $("#me-balance").te
 $("#nav-logout").onclick=()=>{S.token=null;store.del("papote_token");if(S.ws)S.ws.close();location.reload();};
 $("#nav-notif").onclick=enableNotifications;
 $("#nav-calls").onclick=()=>{openCallHistory();send("call_history",{limit:40});};
-$("#nav-admin").onclick=()=>{openAdmin();send("admin_state");};
 $("#me-chip").onclick=openMyProfile;
 $("#btn-call").onclick=()=>{if(S.current&&S.current.type==="dm")startCall(S.current.id);};
 $("#nav-online").onclick=()=>{openOnline();send("who_online");};
@@ -1332,40 +1332,6 @@ function renderCallHistory(calls){
     r.appendChild(nm); r.appendChild(el("div","hint",IC[c.status]+" "+detail));
     const cb=el("button","btn sm green","📞"); cb.onclick=()=>{closeOverlays();startCall(c.with);};
     r.appendChild(cb); box.appendChild(r);
-  });
-}
-
-/* ---------- panneau admin : qui est connecté + IP (toi seul) ---------- */
-function openAdmin(){
-  overlay(`<div class="sheet"><button class="btn ghost sm close" id="ov-close">✕</button>
-    <h2>🛡️ Connectés (admin)</h2>
-    <div class="hint">Visible uniquement par toi. IP + appareil de chaque session en direct.</div>
-    <div class="row" style="margin:6px 0 10px"><button class="btn sm ghost" id="ad-refresh">↻ Rafraîchir</button></div>
-    <div id="ad-list"><div class="hint">Chargement…</div></div></div>`);
-  $("#ov-close").onclick=closeOverlays;
-  $("#ad-refresh").onclick=()=>send("admin_state");
-}
-function deviceLabel(ua){
-  ua=ua||"";
-  if(/Android/i.test(ua))return "📱 Android";
-  if(/iPhone|iPad|iOS/i.test(ua))return "📱 iOS";
-  if(/Windows/i.test(ua))return "💻 Windows";
-  if(/Mac OS X|Macintosh/i.test(ua))return "💻 Mac";
-  if(/Linux/i.test(ua))return "💻 Linux";
-  return "🌐 web";
-}
-function renderAdmin(sessions){
-  const box=$("#ad-list"); if(!box)return; box.innerHTML="";
-  if(!sessions.length){box.appendChild(el("div","hint","Personne de connecté."));return;}
-  sessions.forEach(s=>{
-    const since=(()=>{const d=new Date((s.since||0)*1000);
-      return d.toLocaleDateString("fr-FR",{day:"2-digit",month:"2-digit"})+" "+fmtTime(s.since);})();
-    const r=el("div","list-row"); r.appendChild(avatarEl(s.username));
-    const nm=el("div","nm");
-    nm.innerHTML=`${esc(s.username)} <span class="hint" style="margin:0">${deviceLabel(s.ua)}</span>
-      <div class="hint" style="margin:0">🌐 IP <b style="color:var(--text)">${esc(s.ip)}</b>${(s.local_ip&&s.local_ip!==s.ip)?" · local "+esc(s.local_ip):""}</div>
-      <div class="hint" style="margin:0">connecté depuis ${since}${s.voice?" · 🔊 "+esc(s.voice):""}</div>`;
-    r.appendChild(nm); box.appendChild(r);
   });
 }
 

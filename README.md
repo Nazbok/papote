@@ -107,7 +107,6 @@ Clique ton nom (en haut) pour éditer ton profil : **photo**, **bannière**,
 **bio**, **statut** et **couleur de thème**. Clique l'avatar de quelqu'un (liste
 en ligne, membres d'un serveur, en-tête d'un DM) pour voir sa carte.
 
-
 ## 📊 Statistiques
 
 Le bouton **📊** (ou `Ctrl+T`) ouvre tes stats : parties jouées, victoires /
@@ -127,13 +126,10 @@ pip install -r requirements.txt
 ## Lancer le serveur
 
 ```bash
-python -m papote.server --host 0.0.0.0 --port 8765 --admin sana
+python -m papote.server --host 0.0.0.0 --port 8765
 ```
 
 La base SQLite est créée automatiquement (`--db chemin.db` pour choisir où).
-`--admin` (ou la variable d'environnement `PAPOTE_ADMIN`, valeur par défaut
-`sana`) désigne le ou les comptes autorisés à voir les IP des connectés
-(plusieurs comptes séparés par des virgules).
 
 > ⚠️ Les appels, le vocal et le partage d'écran nécessitent un **contexte
 > sécurisé** : `localhost` ou une URL **https** (le tunnel). En http sur une IP
@@ -172,7 +168,7 @@ permanente en ligne 24/7** (Fly.io, VPS + Caddy, Railway…), voir
 
 | Fichier | Rôle |
 |---------|------|
-| `papote/server.py`   | serveur WebSocket : comptes, amis, groupes/serveurs, relai des messages, casino, signalisation WebRTC (appels + vocaux), journal d'appels, vue admin |
+| `papote/server.py`   | serveur WebSocket : comptes, amis, groupes/serveurs, relai des messages, casino, signalisation WebRTC (appels + vocaux), journal d'appels |
 | `papote/client.py`   | interface terminal (Textual) |
 | `papote/db.py`       | stockage SQLite (messages, profils, serveurs/salons, réactions, journal d'appels…) |
 | `papote/casino.py`   | logique des jeux de casino (aléatoire côté serveur) |

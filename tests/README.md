@@ -7,7 +7,7 @@ Deux niveaux de tests, chacun démarre **son propre serveur** sur un port
 
 `test_server_e2e.py` pilote plusieurs clients WebSocket et vérifie les flux :
 profils, groupes, serveurs/salons, signalisation vocale, appels + journal,
-images, réactions et vue admin.
+images et réactions.
 
 ```bash
 pip install websockets

@@ -33,8 +33,6 @@ fly deploy
 fly open        # -> https://papote.fly.dev
 ```
 
-- **Compte admin (voir les IP)** : déjà `sana` via `fly.toml`. Pour le changer :
-  `fly secrets set PAPOTE_ADMIN=tonpseudo` (les secrets écrasent l'`[env]`).
 - **Domaine perso** (optionnel) : `fly certs add chat.tondomaine.fr` puis ajoute
   les enregistrements DNS indiqués.
 - **Mettre à jour** : `git push` puis `fly deploy`.
@@ -63,7 +61,6 @@ After=network.target
 User=papote
 WorkingDirectory=/opt/papote
 Environment=PORT=8765
-Environment=PAPOTE_ADMIN=sana
 Environment=PAPOTE_DB=/opt/papote/data/server.db
 ExecStart=/opt/papote/.venv/bin/python -m papote.server
 Restart=always
@@ -94,16 +91,15 @@ sudo systemctl reload caddy
 ```
 
 C'est tout : `https://chat.tondomaine.fr` est en ligne, en https, WebSockets
-compris. Caddy transmet la vraie IP des visiteurs (`X-Forwarded-For`), donc la
-vue admin affiche les bonnes IP.
+compris. Caddy transmet la vraie IP des visiteurs (`X-Forwarded-For`).
 
 ---
 
 ## Option C — Render / Railway (rapide, avec réserves)
 
 - **Railway** : « New Project → Deploy from repo », il détecte le `Dockerfile`.
-  Ajoute un **volume** monté sur `/data` et les variables `PAPOTE_DB=/data/server.db`,
-  `PAPOTE_ADMIN=sana`. Fonctionne bien ; crédit mensuel offert puis à l'usage.
+  Ajoute un **volume** monté sur `/data` et la variable `PAPOTE_DB=/data/server.db`.
+  Fonctionne bien ; crédit mensuel offert puis à l'usage.
 - **Render** : « New → Web Service » depuis le repo (Docker). ⚠️ Le plan gratuit
   **s'endort** après inactivité (coupe les WebSockets) et le disque gratuit
   **n'est pas persistant** (la base est perdue au redéploiement). Prends un plan
@@ -125,6 +121,6 @@ vue admin affiche les bonnes IP.
 
   ```bash
   docker build -t papote .
-  docker run --rm -p 8765:8765 -e PAPOTE_ADMIN=sana papote
+  docker run --rm -p 8765:8765 papote
   # -> http://localhost:8765/
   ```

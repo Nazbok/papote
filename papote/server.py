@@ -15,6 +15,19 @@ from websockets.http11 import Response
 from . import DEFAULT_PORT, casino, games, protocol
 from .db import DB
 
+# Extensions locales facultatives (non versionnées) : chargées si présentes.
+try:
+    from . import extra as _extra
+except Exception:
+    _extra = None
+
+
+def _hook(name, *args, **kwargs):
+    """Appelle un point d'extension s'il existe (sinon renvoie None)."""
+    fn = getattr(_extra, name, None) if _extra else None
+    return fn(*args, **kwargs) if fn else None
+
+
 # Page du client web, servie en HTTP sur le même port que le WebSocket.
 _WEBCLIENT = Path(__file__).parent / "webclient.html"
 
@@ -40,10 +53,8 @@ def _make_process_request(html: bytes):
 
 
 class Server:
-    def __init__(self, db: DB, admins=None):
+    def __init__(self, db: DB):
         self.db = db
-        self.admins = {a.strip() for a in (admins or []) if a.strip()}
-        self.sessions: dict = {}           # websocket -> {username, ip, xff, since, ua}
         self.online: dict[str, set] = {}   # username -> {websockets}
         self.blackjack: dict[int, dict] = {}  # user_id -> partie de blackjack en cours
         self.duels: dict[int, dict] = {}   # match_id -> duel entre amis
@@ -51,6 +62,7 @@ class Server:
         self.voice: dict[int, set] = {}    # channel_id -> {usernames} présents en vocal
         self.user_voice: dict[str, int] = {}  # username -> channel_id (un seul vocal à la fois)
         self.calls: dict[tuple, dict] = {}  # (a,b) triés -> appel 1-à-1 en cours (pour le journal)
+        _hook("setup", self)               # laisse une extension locale attacher son état
 
     # --- présence / envoi ---------------------------------------------------
 
@@ -66,57 +78,6 @@ class Server:
 
     def is_online(self, username) -> bool:
         return username in self.online
-
-    def is_admin(self, username) -> bool:
-        return username in self.admins
-
-    # --- métadonnées de connexion (IP, etc. — réservées à l'admin) ----------
-
-    def _session_meta(self, ws):
-        """Extrait IP + en-têtes utiles d'une connexion WebSocket."""
-        ip = ""
-        try:
-            addr = ws.remote_address
-            if addr:
-                ip = addr[0]
-        except Exception:
-            pass
-        xff = ua = ""
-        try:
-            headers = ws.request.headers
-            xff = (headers.get("CF-Connecting-IP") or headers.get("X-Forwarded-For")
-                   or headers.get("X-Real-IP") or "")
-            if xff and "," in xff:
-                xff = xff.split(",")[0].strip()
-            ua = headers.get("User-Agent", "")
-        except Exception:
-            pass
-        return {"username": None, "ip": ip, "xff": xff, "ua": ua, "since": time.time()}
-
-    def _admin_snapshot(self):
-        """Liste des sessions connectées avec IP + état (pour l'admin uniquement)."""
-        out = []
-        for ws, meta in self.sessions.items():
-            uname = meta.get("username")
-            if not uname:
-                continue
-            vc = self.user_voice.get(uname)
-            voice_label = ""
-            if vc is not None:
-                ch = self.db.get_channel(vc)
-                if ch:
-                    srv = self.db.get_server(ch["server_id"])
-                    voice_label = f"{srv['name']} / {ch['name']}" if srv else ch["name"]
-            out.append({
-                "username": uname,
-                "ip": meta.get("xff") or meta.get("ip") or "?",
-                "local_ip": meta.get("ip") or "",
-                "ua": meta.get("ua", ""),
-                "since": meta.get("since", 0),
-                "voice": voice_label,
-            })
-        out.sort(key=lambda s: s["username"].lower())
-        return out
 
     async def push(self, username: str, text: str):
         for ws in list(self.online.get(username, ())):
@@ -174,17 +135,16 @@ class Server:
             return prev_user
 
         self._add_online(user["username"], ws)
-        if ws in self.sessions:
-            self.sessions[ws]["username"] = user["username"]
+        extra_fields = _hook("on_auth", self, ws, user) or {}
         await ws.send(protocol.ok(
             op,
             token=user["token"],
             username=user["username"],
-            is_admin=self.is_admin(user["username"]),
             profile=self.db.get_profile(user["username"]),
             friends=self._friends_payload(user["id"]),
             groups=self.db.list_groups(user["id"]),
             servers=self._servers_payload(user["id"]),
+            **extra_fields,
         ))
         await self.notify_presence(user, True)
         return user
@@ -285,12 +245,6 @@ class Server:
             elif op == "react":
                 await self._handle_react(ws, user, req)
 
-            elif op == "admin_state":
-                if not self.is_admin(uname):
-                    await ws.send(protocol.err(op, "Réservé à l'administrateur."))
-                else:
-                    await ws.send(protocol.ok(op, sessions=self._admin_snapshot()))
-
             elif op == "send":
                 await self._handle_send(ws, user, req)
 
@@ -347,7 +301,11 @@ class Server:
                 await self._handle_call(ws, user, op, req)
 
             else:
-                await ws.send(protocol.err(op or "?", "Opération inconnue."))
+                handled = False
+                if _extra and hasattr(_extra, "on_op"):
+                    handled = await _extra.on_op(self, ws, user, op, req)
+                if not handled:
+                    await ws.send(protocol.err(op or "?", "Opération inconnue."))
         except (KeyError, ValueError, TypeError) as e:
             await ws.send(protocol.err(op or "?", str(e) or "Requête invalide."))
 
@@ -948,7 +906,7 @@ class Server:
 
     async def handler(self, ws):
         user = None
-        self.sessions[ws] = self._session_meta(ws)
+        _hook("on_connect", self, ws)
         try:
             async for raw in ws:
                 try:
@@ -967,7 +925,7 @@ class Server:
         except websockets.WebSocketException:
             pass
         finally:
-            self.sessions.pop(ws, None)
+            _hook("on_disconnect", self, ws)
             if user is not None:
                 self._remove_online(user["username"], ws)
                 if not self.is_online(user["username"]):
@@ -983,18 +941,19 @@ class Server:
                     await self.notify_presence(user, False)
 
 
-async def _amain(host, port, db_path, admins):
+async def _amain(host, port, db_path):
     db = DB(db_path) if db_path else DB()
-    server = Server(db, admins=admins)
-    if server.admins:
-        print(f"  admin(s) : {', '.join(sorted(server.admins))}", flush=True)
+    server = Server(db)
+    _hook("banner", server)
     stop = asyncio.get_running_loop().create_future()
     try:
         for sig in (signal.SIGINT, signal.SIGTERM):
             asyncio.get_running_loop().add_signal_handler(sig, lambda: stop.set_result(None))
     except (NotImplementedError, RuntimeError):
         pass
-    process_request = _make_process_request(_load_webclient())
+    html = _load_webclient()
+    html = _hook("render_web", html) or html
+    process_request = _make_process_request(html)
     async with websockets.serve(server.handler, host, port, max_size=4 * 2 ** 20,
                                 process_request=process_request):
         print(f"papote-server à l'écoute sur ws://{host}:{port}  (db: {db.path})", flush=True)
@@ -1012,14 +971,9 @@ def main():
                     help="port d'écoute (défaut : $PORT ou 8765) — les hébergeurs le fixent")
     ap.add_argument("--db", default=os.environ.get("PAPOTE_DB"),
                     help="chemin de la base SQLite (défaut : $PAPOTE_DB, sinon dossier de données XDG)")
-    ap.add_argument("--admin", default=None,
-                    help="compte(s) admin autorisés à voir les IP (séparés par des virgules ; "
-                         "défaut : $PAPOTE_ADMIN ou 'sana')")
     args = ap.parse_args()
-    raw = args.admin if args.admin is not None else os.environ.get("PAPOTE_ADMIN", "sana")
-    admins = [a for a in raw.split(",") if a.strip()]
     try:
-        asyncio.run(_amain(args.host, args.port, args.db, admins))
+        asyncio.run(_amain(args.host, args.port, args.db))
     except KeyboardInterrupt:
         pass
 

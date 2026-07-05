@@ -14,6 +14,9 @@ dist/
 # Config locale du client
 config.json
 
+# Extensions locales non publiées
+papote/extra.py
+
 # Divers
 .DS_Store
 *.log

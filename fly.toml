@@ -9,7 +9,6 @@ primary_region = "cdg"   # Paris ; change selon toi (fly platform regions)
 
 [env]
   PORT = "8080"
-  PAPOTE_ADMIN = "sana"
   PAPOTE_DB = "/data/server.db"
 
 # Volume persistant : la base SQLite survit aux redéploiements/redémarrages.

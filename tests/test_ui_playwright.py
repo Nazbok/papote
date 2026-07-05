@@ -3,7 +3,7 @@
 Démarre un vrai serveur, ouvre deux navigateurs Firefox (micro factice) et
 vérifie les parcours clés côté UI : profil (bannière/statut), serveur + salon
 vocal, barre d'appel non bloquante avec chrono, partage d'écran (sélecteur
-résolution/fps), envoi d'image, réactions, et vue admin réservée à `sana`.
+résolution/fps), envoi d'image et réactions.
 
 Ignoré automatiquement si Playwright (ou son navigateur Firefox) n'est pas
 installé :
@@ -80,13 +80,6 @@ async def _scenario(http_url):
 
         await _signup(sana, http_url, "sana")
         await _signup(bob, http_url, "bob")
-
-        ck(await sana.locator("#nav-admin").is_visible(), "sana voit le bouton admin")
-        ck(not await bob.locator("#nav-admin").is_visible(), "bob ne voit pas l'admin")
-        await sana.click("#nav-admin")
-        await sana.wait_for_selector("#ad-list .list-row", timeout=5000)
-        ck("IP" in await sana.locator("#ad-list").inner_text(), "panneau admin liste les IP")
-        await sana.click("#ov-close")
 
         # profil : bannière + statut
         await sana.click("#me-chip")

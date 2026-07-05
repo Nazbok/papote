@@ -7,10 +7,8 @@ RUN pip install --no-cache-dir "websockets>=12"
 COPY papote/ ./papote/
 
 # $PORT est fourni par l'hébergeur (défaut 8765). La base va dans un volume
-# persistant si $PAPOTE_DB pointe dessus (ex: /data/server.db). $PAPOTE_ADMIN
-# désigne le compte qui voit les IP.
+# persistant si $PAPOTE_DB pointe dessus (ex: /data/server.db).
 ENV PORT=8765 \
-    PAPOTE_ADMIN=sana \
     PYTHONUNBUFFERED=1
 EXPOSE 8765
 

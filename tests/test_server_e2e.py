@@ -1,9 +1,9 @@
 """Tests de bout en bout du serveur papote.
 
-Démarre un vrai serveur sur un port éphémère (base SQLite temporaire, admin
-« sana ») puis pilote plusieurs clients WebSocket pour vérifier les principaux
-flux : profils, groupes, serveurs/salons, salons vocaux (signalisation),
-appels + journal, images, réactions et vue admin.
+Démarre un vrai serveur sur un port éphémère (base SQLite temporaire) puis
+pilote plusieurs clients WebSocket pour vérifier les principaux flux : profils,
+groupes, serveurs/salons, salons vocaux (signalisation), appels + journal,
+images et réactions.
 
 Utilisable de deux façons :
     python -m pytest tests/
@@ -35,14 +35,14 @@ def _free_port() -> int:
 
 
 @contextlib.contextmanager
-def running_server(admin="sana"):
+def running_server():
     """Lance papote.server dans un sous-processus et le stoppe à la sortie."""
     port = _free_port()
     db = tempfile.mktemp(suffix=".db")
     env = dict(os.environ, PYTHONPATH=ROOT)
     proc = subprocess.Popen(
         [sys.executable, "-m", "papote.server", "--host", "127.0.0.1",
-         "--port", str(port), "--admin", admin, "--db", db],
+         "--port", str(port), "--db", db],
         cwd=ROOT, env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -97,15 +97,15 @@ async def _scenario(url):
     bob = await websockets.connect(url)
     carol = await websockets.connect(url)
 
-    # --- inscriptions + admin ---
+    # --- inscriptions ---
     await _send(sana, "register", username="sana", password="pw123")
     r = await _recv_until(sana, lambda m: m.get("reply") == "register")
-    ck(r["ok"] and r["is_admin"] is True, "sana admin")
+    ck(r["ok"], "inscription sana")
     ck("profile" in r and "servers" in r, "auth: profile + servers")
 
     await _send(bob, "register", username="bob", password="pw123")
     r = await _recv_until(bob, lambda m: m.get("reply") == "register")
-    ck(r["ok"] and r["is_admin"] is False, "bob non-admin")
+    ck(r["ok"], "inscription bob")
 
     await _send(carol, "register", username="carol", password="pw123")
     await _recv_until(carol, lambda m: m.get("reply") == "register")
@@ -190,15 +190,6 @@ async def _scenario(url):
     await _send(sana, "call_history")
     r = await _recv_until(sana, lambda m: m.get("reply") == "call_history")
     ck(r["calls"] and r["calls"][0]["status"] == "answered", "journal d'appels (répondu)")
-
-    # --- vue admin gatée ---
-    await _send(sana, "admin_state")
-    r = await _recv_until(sana, lambda m: m.get("reply") == "admin_state")
-    ck(r["ok"] and any(s["username"] == "bob" for s in r["sessions"])
-       and all("ip" in s for s in r["sessions"]), "admin voit les sessions + IP")
-    await _send(bob, "admin_state")
-    r = await _recv_until(bob, lambda m: m.get("reply") == "admin_state")
-    ck(r and r["ok"] is False, "non-admin refusé sur admin_state")
 
     for w in (sana, bob, carol):
         await w.close()

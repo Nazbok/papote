@@ -14,7 +14,6 @@ Requêtes client -> serveur (champ "op") :
   profile_get       {username?}                    # profil public (défaut: soi)
   profile_update    {avatar?, bio?, accent?, banner?, status?}  # photo, bio, couleur, bannière, statut
   react             {message_id, emoji}            # ajoute/retire une réaction (bascule)
-  admin_state       {}                             # sessions connectées + IP (ADMIN uniquement)
   server_create     {name, icon?}                  # communauté type Discord
   server_list       {}
   server_add        {server_id, username | usernames:[...]}
