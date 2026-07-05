@@ -1,10 +1,30 @@
 # 💬 papote
 
-Une messagerie pour le **terminal** : un serveur, un client avec une interface
-[Textual](https://textual.textualize.io/), et tout passe par WebSocket.
+Une messagerie **terminal + web** : un serveur unique, un client terminal
+([Textual](https://textual.textualize.io/)) **et** un client web (dans le
+navigateur), tout passe par WebSocket.
 
-Messages privés, groupes, demandes d'ami, présence en ligne, historique…
-et un **casino** avec de la monnaie virtuelle et un classement 🎰.
+Messages privés, groupes, demandes d'ami, présence en ligne, historique,
+un **casino** avec monnaie virtuelle et classement 🎰, et des **duels entre
+amis** (morpion, puissance 4) avec paris ⚔️.
+
+## 🌍 Version web (le plus simple)
+
+Le serveur sert aussi une page web sur le même port. Ouvre simplement l'adresse
+du serveur **dans un navigateur** (PC ou téléphone) — aucune installation :
+
+```
+http://localhost:8765/            # en local
+https://xxxx.trycloudflare.com/   # à travers un tunnel (voir plus bas)
+```
+
+Tu te connectes, et tu retrouves tout (chat, casino, duels, stats) avec une
+interface animée. La session est mémorisée : tu **restes connecté même si le
+serveur redémarre** (reconnexion automatique). C'est la façon la plus simple de
+jouer avec des amis : tu leur envoies l'URL, ils l'ouvrent, c'est tout.
+
+Astuce : le script `papote-online` (dans `~/.local/bin/`) démarre le serveur +
+un tunnel public et affiche l'URL à partager en grand.
 
 ## 🎰 Casino
 
@@ -99,5 +119,6 @@ ajouté automatiquement).
 | `papote/db.py`       | stockage SQLite (messages + soldes du casino) |
 | `papote/casino.py`   | logique des jeux de casino (aléatoire côté serveur) |
 | `papote/games.py`    | logique des jeux multijoueur (morpion, puissance 4) |
+| `papote/webclient.html` | client web autonome (servi par le serveur) |
 | `papote/protocol.py` | format des messages JSON échangés |
 | `papote/net.py`      | connexion WebSocket + config côté client |

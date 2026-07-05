@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#6d5efc">
+<title>papote 💬</title>
+<style>
+:root{
+  --bg1:#1a1030; --bg2:#0d0820; --panel:rgba(255,255,255,.06); --panel2:rgba(255,255,255,.09);
+  --stroke:rgba(255,255,255,.12); --text:#f0edff; --muted:#a99fcf;
+  --accent:#8b7bff; --accent2:#ff6fae; --green:#3ddc97; --red:#ff5c7a; --gold:#ffcf5c;
+  --shadow:0 12px 40px rgba(0,0,0,.45);
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{
+  margin:0; font-family:"Segoe UI",system-ui,-apple-system,sans-serif; color:var(--text);
+  background:radial-gradient(1200px 800px at 10% -10%,#3a1f6e 0,transparent 55%),
+             radial-gradient(1000px 700px at 110% 10%,#7a2b6b 0,transparent 50%),
+             linear-gradient(160deg,var(--bg1),var(--bg2));
+  background-attachment:fixed; overflow:hidden;
+}
+button{font-family:inherit; cursor:pointer; border:none; color:var(--text)}
+input{font-family:inherit}
+.hidden{display:none!important}
+.btn{
+  background:linear-gradient(135deg,var(--accent),#6d5efc); color:#fff; border-radius:12px;
+  padding:11px 16px; font-weight:600; font-size:14px; transition:transform .12s,box-shadow .2s,filter .2s;
+  box-shadow:0 6px 18px rgba(109,94,252,.35);
+}
+.btn:hover{transform:translateY(-2px); filter:brightness(1.08)}
+.btn:active{transform:translateY(0) scale(.97)}
+.btn.ghost{background:var(--panel2); box-shadow:none; border:1px solid var(--stroke)}
+.btn.pink{background:linear-gradient(135deg,var(--accent2),#ff4f97); box-shadow:0 6px 18px rgba(255,79,151,.35)}
+.btn.green{background:linear-gradient(135deg,#37d99a,#22b07a); box-shadow:0 6px 18px rgba(55,217,154,.3)}
+.btn.gold{background:linear-gradient(135deg,#ffd76a,#f5a742); color:#3a2600; box-shadow:0 6px 18px rgba(245,167,66,.3)}
+.btn.sm{padding:7px 11px; font-size:13px; border-radius:10px}
+.btn:disabled{opacity:.4; cursor:not-allowed; transform:none!important; filter:none}
+.field{
+  width:100%; padding:13px 14px; border-radius:12px; background:rgba(0,0,0,.25);
+  border:1px solid var(--stroke); color:var(--text); font-size:15px; outline:none; transition:border .2s,background .2s;
+}
+.field:focus{border-color:var(--accent); background:rgba(0,0,0,.35)}
+::placeholder{color:var(--muted)}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:8px}
+
+/* ---------- LOGIN ---------- */
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:20px}
+.login-card{
+  width:100%;max-width:390px;background:var(--panel);backdrop-filter:blur(20px);
+  border:1px solid var(--stroke);border-radius:24px;padding:34px 28px;box-shadow:var(--shadow);
+  animation:pop .5s cubic-bezier(.2,.9,.3,1.3);
+}
+.logo{font-size:40px;font-weight:800;text-align:center;letter-spacing:-1px;
+  background:linear-gradient(135deg,#fff,#c9bcff);-webkit-background-clip:text;background-clip:text;color:transparent}
+.logo .em{-webkit-text-fill-color:initial}
+.subtitle{text-align:center;color:var(--muted);margin:2px 0 22px;font-size:14px}
+.tabs{display:flex;background:rgba(0,0,0,.25);border-radius:12px;padding:4px;margin-bottom:16px}
+.tab{flex:1;text-align:center;padding:9px;border-radius:9px;color:var(--muted);font-weight:600;font-size:14px;transition:.2s;background:none}
+.tab.on{background:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(139,123,255,.4)}
+.login-card .field{margin-bottom:12px}
+.err{color:var(--red);text-align:center;font-size:13px;min-height:18px;margin-top:8px}
+
+/* ---------- APP LAYOUT ---------- */
+#app{position:fixed;inset:0;display:flex;flex-direction:column}
+.topbar{
+  display:flex;align-items:center;gap:12px;padding:10px 16px;
+  background:rgba(0,0,0,.28);border-bottom:1px solid var(--stroke);backdrop-filter:blur(12px);z-index:5
+}
+.topbar .brand{font-weight:800;font-size:20px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--stroke);
+  border-radius:999px;padding:6px 13px;font-size:13px;font-weight:600}
+.chip.coins{background:linear-gradient(135deg,rgba(255,207,92,.22),rgba(255,207,92,.08));border-color:rgba(255,207,92,.35)}
+.spacer{flex:1}
+.iconbtn{background:var(--panel2);border:1px solid var(--stroke);border-radius:11px;width:40px;height:40px;
+  font-size:18px;display:flex;align-items:center;justify-content:center;transition:.15s}
+.iconbtn:hover{background:var(--accent);transform:translateY(-2px)}
+.body{flex:1;display:flex;min-height:0}
+.sidebar{width:290px;background:rgba(0,0,0,.2);border-right:1px solid var(--stroke);display:flex;flex-direction:column;min-height:0}
+.side-head{display:flex;gap:8px;padding:12px;border-bottom:1px solid var(--stroke)}
+.side-head .btn{flex:1}
+.convos{flex:1;overflow-y:auto;padding:8px}
+.section-label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:1px;padding:12px 10px 6px;font-weight:700}
+.convo{display:flex;align-items:center;gap:10px;padding:11px 12px;border-radius:13px;transition:.15s;cursor:pointer;position:relative}
+.convo:hover{background:var(--panel)}
+.convo.on{background:var(--panel2)}
+.avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;
+  font-size:16px;flex-shrink:0;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
+.avatar.grp{background:linear-gradient(135deg,#37d99a,#2b9)}
+.convo .nm{flex:1;font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:9px;height:9px;border-radius:50%;background:#555;flex-shrink:0}
+.dot.on{background:var(--green);box-shadow:0 0 0 0 rgba(61,220,151,.6);animation:pulse 2s infinite}
+.badge{background:var(--accent2);color:#fff;border-radius:999px;font-size:11px;font-weight:700;padding:2px 7px;min-width:20px;text-align:center}
+.pending{opacity:.7;font-style:italic;font-size:13px}
+
+/* chat */
+.chat{flex:1;display:flex;flex-direction:column;min-height:0}
+.chat-head{display:flex;align-items:center;gap:12px;padding:13px 18px;border-bottom:1px solid var(--stroke);background:rgba(0,0,0,.15)}
+.chat-head .nm{font-weight:700;font-size:16px}
+.chat-head .sub{color:var(--muted);font-size:12px}
+.log{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px}
+.empty{margin:auto;text-align:center;color:var(--muted);max-width:320px}
+.empty .big{font-size:52px;margin-bottom:10px}
+.msg{max-width:74%;padding:9px 14px;border-radius:16px;font-size:14.5px;line-height:1.4;word-wrap:break-word;
+  animation:msgin .35s cubic-bezier(.2,.9,.3,1.2);position:relative}
+.msg .who{font-size:11px;font-weight:700;color:var(--accent);margin-bottom:2px}
+.msg .t{font-size:10px;color:var(--muted);margin-top:3px;text-align:right}
+.msg.them{background:var(--panel2);align-self:flex-start;border-bottom-left-radius:5px}
+.msg.me{background:linear-gradient(135deg,var(--accent),#6d5efc);align-self:flex-end;border-bottom-right-radius:5px}
+.msg.me .who{color:#e5e0ff}
+.msg.duel{align-self:center;background:linear-gradient(135deg,rgba(255,207,92,.2),rgba(255,111,174,.15));
+  border:1px solid rgba(255,207,92,.3);text-align:center;font-weight:600;max-width:86%}
+.composer{display:flex;gap:10px;padding:12px 14px;border-top:1px solid var(--stroke);background:rgba(0,0,0,.2)}
+.composer .field{flex:1}
+
+/* ---------- OVERLAYS ---------- */
+.overlay{position:fixed;inset:0;background:rgba(6,3,18,.6);backdrop-filter:blur(6px);z-index:40;
+  display:flex;align-items:center;justify-content:center;padding:16px;animation:fade .25s}
+.sheet{width:100%;max-width:520px;max-height:90vh;overflow-y:auto;background:linear-gradient(160deg,#241748,#180f30);
+  border:1px solid var(--stroke);border-radius:22px;padding:22px;box-shadow:var(--shadow);animation:pop .35s cubic-bezier(.2,.9,.3,1.25)}
+.sheet h2{margin:0 0 4px;font-size:22px}
+.sheet .close{position:absolute;top:16px;right:18px}
+.sheet-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.modal-sm{max-width:400px}
+.row{display:flex;gap:10px;flex-wrap:wrap}
+.row.center{justify-content:center}
+.hint{color:var(--muted);font-size:13px;margin:6px 0 12px}
+
+/* casino */
+.game-tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.game-tab{background:var(--panel2);border:1px solid var(--stroke);border-radius:12px;padding:9px 13px;font-size:14px;font-weight:600;transition:.15s}
+.game-tab.on{background:linear-gradient(135deg,var(--accent),#6d5efc);border-color:transparent}
+.bet-row{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.bet-row .field{max-width:130px}
+.stage{min-height:130px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  background:rgba(0,0,0,.22);border-radius:16px;padding:18px;margin-bottom:14px}
+.big-emoji{font-size:60px;filter:drop-shadow(0 6px 14px rgba(0,0,0,.4))}
+.reels{display:flex;gap:12px;font-size:52px}
+.reel{width:70px;height:80px;background:rgba(0,0,0,.3);border-radius:14px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.reel.spin{animation:reel .4s linear infinite}
+.result-line{font-size:16px;font-weight:700;text-align:center;min-height:22px}
+.win{color:var(--green)} .lose{color:var(--red)} .neutral{color:var(--gold)}
+.cards{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.card{width:52px;height:72px;background:#fff;color:#111;border-radius:9px;display:flex;align-items:center;justify-content:center;
+  font-size:20px;font-weight:800;box-shadow:0 4px 12px rgba(0,0,0,.35);animation:deal .4s cubic-bezier(.2,.9,.3,1.3)}
+.card.red{color:#d43}
+.card.back{background:linear-gradient(135deg,#6d5efc,#8b7bff);color:#fff}
+.hand-label{font-size:13px;color:var(--muted);margin-bottom:4px;text-align:center}
+
+/* leaderboard / stats / online */
+.list-row{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;background:var(--panel);margin-bottom:8px}
+.list-row .rank{font-size:20px;width:34px;text-align:center}
+.list-row .nm{flex:1;font-weight:600}
+.list-row .val{font-weight:700;color:var(--gold)}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.stat-box{background:var(--panel);border:1px solid var(--stroke);border-radius:14px;padding:14px;text-align:center}
+.stat-box .v{font-size:26px;font-weight:800}
+.stat-box .k{color:var(--muted);font-size:12px;margin-top:2px}
+
+/* duel */
+.duel-title{text-align:center;font-size:19px;font-weight:800;margin-bottom:4px}
+.duel-status{text-align:center;color:var(--muted);min-height:22px;margin-bottom:14px;font-weight:600}
+.morpion{display:grid;grid-template-columns:repeat(3,84px);gap:8px;justify-content:center;margin:0 auto 8px}
+.cell{height:84px;background:rgba(0,0,0,.28);border-radius:14px;font-size:44px;display:flex;align-items:center;justify-content:center;
+  transition:.15s;border:1px solid var(--stroke)}
+.cell.playable{cursor:pointer}
+.cell.playable:hover{background:var(--panel2);transform:scale(1.04)}
+.cell .drop{animation:pop .3s cubic-bezier(.2,.9,.3,1.4)}
+.p4wrap{display:flex;flex-direction:column;align-items:center;gap:8px}
+.p4cols{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;width:100%;max-width:360px}
+.p4colbtn{background:var(--panel2);border:1px solid var(--stroke);border-radius:8px;padding:6px 0;font-size:16px;transition:.15s}
+.p4colbtn:hover:not(:disabled){background:var(--accent);transform:translateY(-2px)}
+.p4grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px;width:100%;max-width:360px;background:rgba(0,0,0,.3);
+  padding:8px;border-radius:14px}
+.p4cell{aspect-ratio:1;background:rgba(255,255,255,.06);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:min(6vw,26px)}
+.p4cell .tok{width:82%;height:82%;border-radius:50%;animation:fall .35s cubic-bezier(.3,.7,.4,1.4)}
+.p4cell .r{background:radial-gradient(circle at 35% 30%,#ff8aa5,#e0324f)}
+.p4cell .y{background:radial-gradient(circle at 35% 30%,#ffe27a,#f0b429)}
+
+/* toasts + reconnect */
+#toasts{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:80;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{background:rgba(20,12,40,.95);border:1px solid var(--stroke);border-radius:12px;padding:11px 18px;font-size:14px;
+  font-weight:600;box-shadow:var(--shadow);animation:toastin .3s cubic-bezier(.2,.9,.3,1.3)}
+.toast.err{border-color:var(--red);color:#ffc2ce}
+.toast.ok{border-color:var(--green)}
+#reconnect{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(90deg,#f5a742,#ff6fae);color:#2a1500;
+  text-align:center;padding:9px;font-weight:700;font-size:14px;z-index:90;animation:slideup .3s}
+
+@keyframes pop{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:scale(1)}}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+@keyframes msgin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(61,220,151,.6)}70%{box-shadow:0 0 0 7px rgba(61,220,151,0)}100%{box-shadow:0 0 0 0 rgba(61,220,151,0)}}
+@keyframes reel{from{transform:translateY(-8px)}to{transform:translateY(8px)}}
+@keyframes deal{from{opacity:0;transform:translateY(-18px) rotate(-8deg)}to{opacity:1;transform:none}}
+@keyframes fall{from{transform:translateY(-260px)}to{transform:translateY(0)}}
+@keyframes toastin{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes slideup{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes spinwheel{to{transform:rotate(1440deg)}}
+.flip{animation:flip .6s}
+@keyframes flip{0%{transform:rotateY(0)}100%{transform:rotateY(720deg)}}
+
+@media(max-width:720px){
+  .sidebar{width:100%;position:absolute;inset:0;z-index:10;transition:transform .28s}
+  .sidebar.tuck{transform:translateX(-100%)}
+  .chat{position:absolute;inset:0}
+  .back-btn{display:flex!important}
+  .morpion{grid-template-columns:repeat(3,72px)} .cell{height:72px;font-size:38px}
+}
+.back-btn{display:none}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login">
+  <div class="login-card">
+    <div class="logo"><span class="em">💬</span> papote</div>
+    <div class="subtitle">chat & jeux, direct dans ton navigateur</div>
+    <div class="tabs">
+      <button class="tab on" id="tab-login">Se connecter</button>
+      <button class="tab" id="tab-reg">Créer un compte</button>
+    </div>
+    <input class="field" id="in-user" placeholder="Nom d'utilisateur" autocomplete="username">
+    <input class="field" id="in-pass" type="password" placeholder="Mot de passe" autocomplete="current-password">
+    <button class="btn" id="do-auth" style="width:100%;margin-top:6px">Se connecter</button>
+    <div class="err" id="login-err"></div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app" class="hidden">
+  <div class="topbar">
+    <button class="iconbtn back-btn" id="back-btn">‹</button>
+    <div class="brand">💬</div>
+    <div class="chip" id="me-chip">👤 <span id="me-name"></span></div>
+    <div class="chip coins">🪙 <span id="me-balance">0</span></div>
+    <div class="spacer"></div>
+    <button class="iconbtn" id="nav-online" title="En ligne">🌐</button>
+    <button class="iconbtn" id="nav-casino" title="Casino">🎰</button>
+    <button class="iconbtn" id="nav-stats" title="Stats">📊</button>
+    <button class="iconbtn" id="nav-board" title="Classement">🏆</button>
+    <button class="iconbtn" id="nav-logout" title="Déconnexion">⎋</button>
+  </div>
+  <div class="body">
+    <div class="sidebar" id="sidebar">
+      <div class="side-head">
+        <button class="btn sm" id="add-friend">➕ Ami</button>
+        <button class="btn sm ghost" id="new-group">👥 Groupe</button>
+      </div>
+      <div class="convos" id="convos"></div>
+    </div>
+    <div class="chat">
+      <div class="chat-head" id="chat-head">
+        <button class="iconbtn back-btn" id="back-btn2">‹</button>
+        <div style="flex:1">
+          <div class="nm" id="chat-title">Choisis une conversation</div>
+          <div class="sub" id="chat-sub"></div>
+        </div>
+        <button class="btn sm pink" id="btn-duel">⚔️ Défier</button>
+      </div>
+      <div class="log" id="log">
+        <div class="empty"><div class="big">💬</div><div>Sélectionne un ami ou un groupe à gauche pour commencer à papoter.</div></div>
+      </div>
+      <div class="composer">
+        <input class="field" id="composer" placeholder="Écris un message…" autocomplete="off">
+        <button class="btn" id="send-btn">Envoyer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+<div id="reconnect" class="hidden">Reconnexion au serveur…</div>
+<div id="overlays"></div>
+
+<script>
+"use strict";
+const $=(s,r=document)=>r.querySelector(s);
+const el=(t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e};
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m]));
+const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},
+             set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}},
+             del:k=>{try{localStorage.removeItem(k)}catch(e){}}};
+
+const S={ws:null,token:store.get("papote_token"),username:"",balance:0,
+  friends:[],groups:[],current:null,unread:{},duel:null,connected:false,
+  reconnectTimer:null,delay:600,authMode:"login",pendingInvite:null};
+
+/* ---------- WebSocket ---------- */
+function wsURL(){
+  const p=location.protocol==="https:"?"wss:":"ws:";
+  return p+"//"+location.host+"/";
+}
+function connect(){
+  clearTimeout(S.reconnectTimer);
+  let ws;
+  try{ws=new WebSocket(wsURL())}catch(e){scheduleReconnect();return}
+  S.ws=ws;
+  ws.onopen=()=>{
+    S.connected=true;S.delay=600;$("#reconnect").classList.add("hidden");
+    if(S.token) send("auth",{token:S.token});
+  };
+  ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch(_){return}route(m)};
+  ws.onclose=()=>{S.connected=false;scheduleReconnect()};
+  ws.onerror=()=>{try{ws.close()}catch(e){}};
+}
+function scheduleReconnect(){
+  if(!$("#app").classList.contains("hidden")) $("#reconnect").classList.remove("hidden");
+  S.reconnectTimer=setTimeout(connect,S.delay);
+  S.delay=Math.min(S.delay*1.6,5000);
+}
+function send(op,extra){
+  if(S.ws&&S.ws.readyState===1) S.ws.send(JSON.stringify(Object.assign({op},extra||{})));
+}
+
+/* ---------- routing ---------- */
+function route(m){ if(m.ev) onEvent(m); else if(m.reply) onReply(m); }
+
+function onReply(m){
+  if(!m.ok){
+    if(["register","login","auth"].includes(m.reply)){
+      if(m.reply==="auth"){S.token=null;store.del("papote_token");showLogin();}
+      $("#login-err").textContent=m.error||"Erreur.";
+    } else toast(m.error||"Erreur.","err");
+    return;
+  }
+  switch(m.reply){
+    case "register": case "login": case "auth":
+      S.token=m.token; store.set("papote_token",m.token);
+      S.username=m.username; S.friends=m.friends||[]; S.groups=m.groups||[];
+      enterApp(); send("casino_state"); break;
+    case "friend_list": case "friend_add": case "friend_accept":
+      if(m.friends){S.friends=m.friends;renderSidebar();} break;
+    case "group_create": S.groups=m.groups||S.groups; renderSidebar(); break;
+    case "history":
+      renderHistory(m); break;
+    case "casino_state": setBalance(m.balance); break;
+    case "casino_play": setBalance(m.balance); casinoResult(m); break;
+    case "casino_bonus": setBalance(m.balance); toast("🎁 Bonus encaissé !","ok"); refreshCasinoBalance(); break;
+    case "blackjack": setBalance(m.balance); bjRender(m); break;
+    case "leaderboard": renderLeaderboard(m.players||[]); break;
+    case "who_online": renderOnline(m.users||[]); break;
+    case "stats": renderStats(m); break;
+    case "game_history": renderGameHistory(m.games||[]); break;
+    case "duel_challenge": toast("Défi envoyé à "+m.opponent+" — en attente…"); break;
+  }
+}
+
+function onEvent(m){
+  switch(m.ev){
+    case "message": incoming(m.msg); break;
+    case "friend_request": toast("📨 Demande d'ami de "+m.from); send("friend_list"); break;
+    case "friend_accepted": toast(m.username+" a accepté ta demande !","ok"); send("friend_list"); break;
+    case "group_added": S.groups=S.groups.filter(g=>g.id!==m.group.id).concat([m.group]); toast("Ajouté au groupe « "+m.group.name+" »"); renderSidebar(); break;
+    case "presence":
+      S.friends.forEach(f=>{if(f.username===m.username)f.online=m.online}); renderSidebar(); break;
+    case "duel_invite": showInvite(m); break;
+    case "duel_start": openDuel(m); break;
+    case "duel_update": if(S.duel&&S.duel.mid===m.match_id){S.duel.board=m.board;S.duel.turn=m.turn;renderDuel();} break;
+    case "duel_over": setBalance(m.balance); if(S.duel&&S.duel.mid===m.match_id){S.duel.board=m.board;S.duel.over=true;S.duel.result=m.result;S.duel.delta=m.delta;S.duel.winner=m.winner;renderDuel();} break;
+    case "duel_declined": toast(m.by+" a refusé ton défi.","err"); break;
+    case "duel_cancel": toast(m.reason||"Partie annulée.","err"); closeOverlays(); S.duel=null; break;
+  }
+}
+
+/* ---------- LOGIN ---------- */
+$("#tab-login").onclick=()=>setAuthMode("login");
+$("#tab-reg").onclick=()=>setAuthMode("register");
+function setAuthMode(mode){
+  S.authMode=mode;
+  $("#tab-login").classList.toggle("on",mode==="login");
+  $("#tab-reg").classList.toggle("on",mode==="register");
+  $("#do-auth").textContent=mode==="login"?"Se connecter":"Créer mon compte";
+  $("#in-pass").autocomplete=mode==="login"?"current-password":"new-password";
+  $("#login-err").textContent="";
+}
+$("#do-auth").onclick=doAuth;
+$("#in-pass").addEventListener("keydown",e=>{if(e.key==="Enter")doAuth()});
+$("#in-user").addEventListener("keydown",e=>{if(e.key==="Enter")$("#in-pass").focus()});
+function doAuth(){
+  const u=$("#in-user").value.trim(), p=$("#in-pass").value;
+  if(!u||!p){$("#login-err").textContent="Remplis les deux champs.";return;}
+  $("#login-err").textContent="Connexion…";
+  send(S.authMode,{username:u,password:p});
+}
+function showLogin(){$("#app").classList.add("hidden");$("#login").classList.remove("hidden");}
+
+/* ---------- APP ---------- */
+function enterApp(){
+  $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
+  $("#me-name").textContent=S.username;
+  renderSidebar();
+}
+function setBalance(b){ if(typeof b==="number"){S.balance=b; $("#me-balance").textContent=b;} }
+
+$("#nav-logout").onclick=()=>{S.token=null;store.del("papote_token");if(S.ws)S.ws.close();location.reload();};
+$("#nav-online").onclick=()=>{openOnline();send("who_online");};
+$("#nav-casino").onclick=openCasino;
+$("#nav-stats").onclick=()=>{openStats();send("stats");send("game_history",{limit:20});};
+$("#nav-board").onclick=()=>{openLeaderboard();send("leaderboard");};
+$("#add-friend").onclick=()=>promptModal("Ajouter un ami","nom d'utilisateur",v=>{if(v)send("friend_add",{username:v})});
+$("#new-group").onclick=newGroup;
+$("#back-btn").onclick=$("#back-btn2").onclick=()=>$("#sidebar").classList.remove("tuck");
+
+/* ---------- sidebar ---------- */
+function convoKey(c){return c.type+":"+c.id}
+function renderSidebar(){
+  const box=$("#convos"); box.innerHTML="";
+  const incoming=S.friends.filter(f=>f.kind==="incoming");
+  if(incoming.length){
+    box.appendChild(sectionLabel("Demandes d'ami"));
+    incoming.forEach(f=>{
+      const r=el("div","convo");
+      r.innerHTML=`<div class="avatar">${esc(f.username[0].toUpperCase())}</div><div class="nm">${esc(f.username)}</div>`;
+      const acc=el("button","btn sm green","Accepter");
+      acc.onclick=e=>{e.stopPropagation();send("friend_accept",{username:f.username});};
+      r.appendChild(acc); box.appendChild(r);
+    });
+  }
+  const friends=S.friends.filter(f=>f.kind==="friend");
+  box.appendChild(sectionLabel("Amis"));
+  if(!friends.length && !S.groups.length){
+    const e=el("div","hint","Ajoute un ami avec ➕ ou via 🌐 pour commencer.");
+    e.style.padding="6px 10px"; box.appendChild(e);
+  }
+  friends.forEach(f=>box.appendChild(convoRow({type:"dm",id:f.username},f.username,f.online)));
+  S.friends.filter(f=>f.kind==="outgoing").forEach(f=>{
+    const r=el("div","convo pending");
+    r.innerHTML=`<div class="avatar">${esc(f.username[0].toUpperCase())}</div><div class="nm">⏳ ${esc(f.username)}</div>`;
+    box.appendChild(r);
+  });
+  if(S.groups.length){
+    box.appendChild(sectionLabel("Groupes"));
+    S.groups.forEach(g=>box.appendChild(convoRow({type:"grp",id:g.id},g.name,null,true)));
+  }
+}
+function sectionLabel(t){return el("div","section-label",t)}
+function convoRow(c,name,online,isGroup){
+  const r=el("div","convo"); if(S.current&&convoKey(S.current)===convoKey(c))r.classList.add("on");
+  const av=el("div","avatar"+(isGroup?" grp":"")); av.textContent=isGroup?"👥":name[0].toUpperCase();
+  r.appendChild(av);
+  if(!isGroup){const d=el("div","dot"+(online?" on":"")); r.appendChild(d);}
+  r.appendChild(el("div","nm",name));
+  const u=S.unread[convoKey(c)]; if(u)r.appendChild(el("div","badge",String(u)));
+  r.onclick=()=>openConversation(c,name,isGroup);
+  return r;
+}
+
+/* ---------- chat ---------- */
+function openConversation(c,name,isGroup){
+  S.current=c; delete S.unread[convoKey(c)];
+  $("#chat-title").textContent=(isGroup?"👥 ":"💬 ")+name;
+  $("#btn-duel").style.display=isGroup?"none":"";
+  const g=isGroup?S.groups.find(x=>x.id===c.id):null;
+  $("#chat-sub").textContent=g?g.members.join(", "):"";
+  $("#log").innerHTML=""; renderSidebar();
+  if(window.innerWidth<=720)$("#sidebar").classList.add("tuck");
+  send("history",{with_type:isGroup?"group":"dm",with:c.id});
+}
+function renderHistory(m){
+  const c=m.with_type==="dm"?{type:"dm",id:m.with}:{type:"grp",id:m.with};
+  if(!S.current||convoKey(S.current)!==convoKey(c))return;
+  $("#log").innerHTML="";
+  (m.messages||[]).forEach(writeMsg);
+  scrollLog();
+}
+function incoming(msg){
+  const key=msg.to_type==="dm"?("dm:"+(msg.from===S.username?msg.to:msg.from)):("grp:"+msg.to);
+  if(S.current&&convoKey(S.current)===key){writeMsg(msg);scrollLog();}
+  else{S.unread[key]=(S.unread[key]||0)+1;renderSidebar();
+    if(msg.from!==S.username)toast("💬 "+msg.from+" : "+msg.body.slice(0,40));}
+}
+function writeMsg(msg){
+  const mine=msg.from===S.username;
+  const isDuel=msg.body.startsWith("⚔️");
+  const m=el("div","msg "+(isDuel?"duel":mine?"me":"them"));
+  if(!isDuel && (!mine || S.current.type==="grp")) m.appendChild(el("div","who",msg.from));
+  const b=el("div"); b.textContent=msg.body; m.appendChild(b);
+  if(!isDuel){const t=el("div","t",fmtTime(msg.ts)); m.appendChild(t);}
+  $("#log").appendChild(m);
+}
+$("#send-btn").onclick=sendMsg;
+$("#composer").addEventListener("keydown",e=>{if(e.key==="Enter")sendMsg()});
+function sendMsg(){
+  const inp=$("#composer"),body=inp.value.trim();
+  if(!body||!S.current)return;
+  send("send",{to_type:S.current.type==="dm"?"dm":"group",to:S.current.id,body});
+  inp.value="";
+}
+function scrollLog(){const l=$("#log");l.scrollTop=l.scrollHeight;}
+function fmtTime(ts){const d=new Date(ts*1000);return d.getHours().toString().padStart(2,"0")+":"+d.getMinutes().toString().padStart(2,"0");}
+
+/* ---------- groups ---------- */
+function newGroup(){
+  const ov=overlay(`<div class="sheet modal-sm"><div class="sheet-head"><h2>👥 Nouveau groupe</h2></div>
+    <input class="field" id="g-name" placeholder="Nom du groupe" style="margin-bottom:10px">
+    <input class="field" id="g-mem" placeholder="Membres (séparés par des virgules)">
+    <div class="row center" style="margin-top:16px"><button class="btn" id="g-ok">Créer</button><button class="btn ghost" id="g-cancel">Annuler</button></div></div>`);
+  $("#g-cancel",ov).onclick=closeOverlays;
+  $("#g-ok",ov).onclick=()=>{const n=$("#g-name",ov).value.trim();
+    const mem=$("#g-mem",ov).value.split(",").map(s=>s.trim()).filter(Boolean);
+    if(n)send("group_create",{name:n,members:mem}); closeOverlays();};
+}
+
+/* ---------- overlays helpers ---------- */
+function overlay(html){
+  const o=el("div","overlay"); o.innerHTML=html;
+  o.addEventListener("click",e=>{if(e.target===o)closeOverlays();});
+  $("#overlays").appendChild(o); return o;
+}
+function closeOverlays(){$("#overlays").innerHTML="";}
+function promptModal(title,ph,cb){
+  const o=overlay(`<div class="sheet modal-sm"><h2>${esc(title)}</h2>
+    <input class="field" id="pm-in" placeholder="${esc(ph)}" style="margin:14px 0">
+    <div class="row center"><button class="btn" id="pm-ok">OK</button><button class="btn ghost" id="pm-cancel">Annuler</button></div></div>`);
+  const inp=$("#pm-in",o); inp.focus();
+  const go=()=>{cb(inp.value.trim());closeOverlays();};
+  $("#pm-ok",o).onclick=go; $("#pm-cancel",o).onclick=closeOverlays;
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter")go()});
+}
+
+/* ---------- toasts ---------- */
+function toast(text,kind){
+  const t=el("div","toast"+(kind?" "+kind:""),text); $("#toasts").appendChild(t);
+  setTimeout(()=>{t.style.transition="opacity .3s";t.style.opacity="0";setTimeout(()=>t.remove(),300);},2600);
+}
+
+/* ---------- ONLINE ---------- */
+const REL={friend:"déjà ami",outgoing:"demande envoyée",incoming:"t'a ajouté — accepte !"};
+function openOnline(){overlay(`<div class="sheet"><button class="btn ghost sm close" id="ov-close">✕</button>
+  <h2>🌐 Qui est en ligne</h2><div class="hint">Clique sur quelqu'un pour l'ajouter.</div><div id="online-list"></div></div>`);
+  $("#ov-close").onclick=closeOverlays;}
+function renderOnline(users){
+  const box=$("#online-list"); if(!box)return; box.innerHTML="";
+  if(!users.length){box.appendChild(el("div","hint","Personne d'autre en ligne."));return;}
+  users.forEach(u=>{
+    const r=el("div","list-row");
+    r.innerHTML=`<div class="avatar">${esc(u.username[0].toUpperCase())}</div><div class="nm">${esc(u.username)}</div>`;
+    if(u.relation==="none"||u.relation==="incoming"){
+      const b=el("button","btn sm green",u.relation==="incoming"?"Accepter":"Ajouter");
+      b.onclick=()=>{send(u.relation==="incoming"?"friend_accept":"friend_add",{username:u.username});toast("👍 "+u.username);b.disabled=true;b.textContent="✓";};
+      r.appendChild(b);
+    } else r.appendChild(el("div","hint",REL[u.relation]||""));
+    box.appendChild(r);
+  });
+}
+
+/* ---------- LEADERBOARD ---------- */
+function openLeaderboard(){overlay(`<div class="sheet"><button class="btn ghost sm close" id="ov-close">✕</button>
+  <h2>🏆 Classement du casino</h2><div id="lb-list"></div></div>`);$("#ov-close").onclick=closeOverlays;}
+function renderLeaderboard(players){
+  const box=$("#lb-list"); if(!box)return; box.innerHTML="";
+  const medals=["🥇","🥈","🥉"];
+  players.forEach((p,i)=>{
+    const r=el("div","list-row");
+    const me=p.username===S.username?" (toi)":"";
+    r.innerHTML=`<div class="rank">${medals[i]||("#"+(i+1))}</div>
+      <div class="nm">${esc(p.username)}${me}</div><div class="val">🪙 ${p.balance}</div>`;
+    box.appendChild(r);
+  });
+  if(!players.length)box.appendChild(el("div","hint","Personne n'a encore joué."));
+}
+
+/* ---------- STATS ---------- */
+const KIND={coinflip:"🪙 Pile ou face",dice:"🎲 Dés",slots:"🎰 Machine à sous",roulette:"🎡 Roulette",
+  blackjack:"🃏 Blackjack",casino:"🎲 Casino",morpion:"⚔️ Morpion",puissance4:"⚔️ Puissance 4"};
+function openStats(){overlay(`<div class="sheet"><button class="btn ghost sm close" id="ov-close">✕</button>
+  <h2>📊 Tes statistiques</h2><div id="stat-body"><div class="hint">Chargement…</div></div>
+  <h2 style="font-size:16px;margin-top:16px">Dernières parties</h2><div id="stat-hist"></div></div>`);$("#ov-close").onclick=closeOverlays;}
+function renderStats(s){
+  const b=$("#stat-body"); if(!b)return;
+  const rate=s.games?Math.round(s.wins/s.games*100):0;
+  b.innerHTML=`<div class="stat-grid">
+    <div class="stat-box"><div class="v">${s.games}</div><div class="k">parties</div></div>
+    <div class="stat-box"><div class="v">${rate}%</div><div class="k">réussite</div></div>
+    <div class="stat-box"><div class="v" style="color:var(--green)">${s.wins}</div><div class="k">victoires</div></div>
+    <div class="stat-box"><div class="v" style="color:var(--red)">${s.losses}</div><div class="k">défaites</div></div>
+    <div class="stat-box"><div class="v">${signed(s.net)}</div><div class="k">gain net</div></div>
+    <div class="stat-box"><div class="v" style="color:var(--gold)">+${s.biggest_win}</div><div class="k">plus gros gain</div></div>
+  </div>`;
+  if(s.per_game&&s.per_game.length){
+    s.per_game.forEach(g=>{
+      const r=el("div","list-row");
+      r.innerHTML=`<div class="nm">${KIND[g.kind]||g.kind}</div><div class="hint">${g.games} parties</div><div class="val">${signed(g.net)}</div>`;
+      b.appendChild(r);
+    });
+  }
+}
+function renderGameHistory(games){
+  const box=$("#stat-hist"); if(!box)return; box.innerHTML="";
+  if(!games.length){box.appendChild(el("div","hint","Rien encore. Direction le casino 🎰"));return;}
+  games.forEach(g=>{
+    const r=el("div","list-row");
+    const d=new Date(g.ts*1000), when=d.toLocaleDateString("fr-FR",{day:"2-digit",month:"2-digit"})+" "+fmtTime(g.ts);
+    const vs=g.opponent?" vs "+esc(g.opponent):"";
+    r.innerHTML=`<div class="nm" style="font-size:13px">${KIND[g.kind]||g.kind}${vs}<div class="hint" style="margin:0">${when}${g.bet?" · mise "+g.bet:""}</div></div><div class="val">${signed(g.delta)}</div>`;
+    box.appendChild(r);
+  });
+}
+function signed(n){const c=n>0?"var(--green)":n<0?"var(--red)":"var(--muted)";return `<span style="color:${c}">${n>0?"+":""}${n}</span>`;}
+
+/* ---------- CASINO ---------- */
+let casinoGame="coinflip";
+function openCasino(){
+  overlay(`<div class="sheet"><button class="btn ghost sm close" id="ov-close">✕</button>
+   <div class="sheet-head"><h2>🎰 Casino</h2><div class="chip coins">🪙 <span id="cas-bal">${S.balance}</span></div></div>
+   <div class="game-tabs" id="game-tabs"></div>
+   <div class="bet-row"><span>Mise</span><input class="field" id="cas-bet" type="number" value="100" min="1"><button class="btn gold sm" id="cas-bonus">🎁 Bonus</button></div>
+   <div id="game-area"></div></div>`);
+  $("#ov-close").onclick=()=>{closeOverlays();};
+  $("#cas-bonus").onclick=()=>send("casino_bonus");
+  const games=[["coinflip","🪙 Pile ou Face"],["dice","🎲 Dés"],["slots","🎰 Machine"],["roulette","🎡 Roulette"],["blackjack","🃏 Blackjack"]];
+  const tabs=$("#game-tabs");
+  games.forEach(([k,label])=>{const t=el("button","game-tab"+(k===casinoGame?" on":""),label);
+    t.onclick=()=>{casinoGame=k;[...tabs.children].forEach(c=>c.classList.remove("on"));t.classList.add("on");renderGameArea();};tabs.appendChild(t);});
+  renderGameArea();
+}
+function refreshCasinoBalance(){const b=$("#cas-bal");if(b)b.textContent=S.balance;}
+function bet(){const e=$("#cas-bet");const v=e?parseInt(e.value):NaN;return isNaN(v)?0:v;}
+function renderGameArea(){
+  const a=$("#game-area"); if(!a)return;
+  if(casinoGame==="coinflip") a.innerHTML=`<div class="stage" id="stage"><div class="big-emoji">🪙</div><div class="result-line" id="res"></div></div>
+    <div class="row center"><button class="btn" onclick="play('coinflip','pile')">Pile</button><button class="btn pink" onclick="play('coinflip','face')">Face</button></div>`;
+  else if(casinoGame==="dice") a.innerHTML=`<div class="stage" id="stage"><div class="big-emoji">🎲</div><div class="result-line" id="res"></div></div>
+    <div class="row center"><span>Ton numéro :</span><input class="field" id="dice-n" type="number" value="6" min="1" max="6" style="max-width:80px"><button class="btn" onclick="play('dice',$('#dice-n').value)">Lancer (×6)</button></div>`;
+  else if(casinoGame==="slots") a.innerHTML=`<div class="stage" id="stage"><div class="reels" id="reels"><div class="reel">🍒</div><div class="reel">🍋</div><div class="reel">🔔</div></div><div class="result-line" id="res"></div></div>
+    <div class="row center"><button class="btn green" onclick="play('slots')">🎰 Tourner</button></div>`;
+  else if(casinoGame==="roulette") a.innerHTML=`<div class="stage" id="stage"><div class="big-emoji" id="rwheel">🎡</div><div class="result-line" id="res"></div></div>
+    <div class="row center" style="margin-bottom:8px"><input class="field" id="rn" type="number" min="0" max="36" placeholder="n°" style="max-width:80px"><button class="btn" onclick="play('roulette',$('#rn').value)">Miser n° (×35)</button></div>
+    <div class="row center">${["rouge","noir","pair","impair","bas","haut","d1","d2","d3"].map(x=>`<button class="btn ghost sm" onclick="play('roulette','${x}')">${x}</button>`).join("")}</div>`;
+  else if(casinoGame==="blackjack") a.innerHTML=`<div class="stage" id="stage"><div id="bj-area"><div class="hint">Clique « Distribuer » pour jouer.</div></div></div>
+    <div class="row center"><button class="btn green" id="bj-deal" onclick="send('bj_deal',{bet:bet()})">Distribuer</button>
+    <button class="btn" id="bj-hit" onclick="send('bj_hit')" disabled>Tirer</button>
+    <button class="btn pink" id="bj-stand" onclick="send('bj_stand')" disabled>Rester</button></div>`;
+}
+function play(game,choice){
+  const b=bet(); if(b<=0){toast("Mise invalide.","err");return;}
+  if(game==="slots"){const reels=$("#reels");if(reels)[...reels.children].forEach(r=>r.classList.add("spin"));}
+  if(game==="coinflip"){const st=$("#stage");const c=st?st.querySelector(".big-emoji"):null;if(c)c.classList.add("flip");}
+  send("casino_play",{game,bet:b,choice});
+}
+function casinoResult(m){
+  refreshCasinoBalance();
+  const res=$("#res");
+  if(casinoGame==="slots"){const reels=$("#reels");if(reels&&m.visual){const parts=m.visual.trim().split(/\s+/);
+    [...reels.children].forEach((r,i)=>{r.classList.remove("spin");if(parts[i])r.textContent=parts[i];});}}
+  if(casinoGame==="coinflip"){const st=$("#stage");const c=st?st.querySelector(".big-emoji"):null;if(c)setTimeout(()=>c.classList.remove("flip"),50);}
+  if(casinoGame==="roulette"){const w=$("#rwheel");if(w){w.style.animation="none";void w.offsetWidth;w.style.animation="spinwheel .8s cubic-bezier(.2,.7,.2,1)";}}
+  if(res){const won=m.delta>0;
+    res.className="result-line "+(won?"win":m.delta<0?"lose":"neutral");
+    res.textContent=(m.detail||"")+"  "+(m.delta>0?"+":"")+m.delta+" 🪙";}
+}
+/* blackjack render */
+function bjRender(m){
+  const area=$("#bj-area"); if(!area)return;
+  const cardHTML=c=>{if(c==="🂠")return `<div class="card back">?</div>`;
+    const red=c.includes("♥")||c.includes("♦");return `<div class="card${red?" red":""}">${esc(c)}</div>`;};
+  area.innerHTML=`<div class="hand-label">Croupier ${m.dealer_value!=null?"("+m.dealer_value+")":""}</div>
+    <div class="cards">${(m.dealer||[]).map(cardHTML).join("")}</div>
+    <div class="hand-label" style="margin-top:10px">Toi (${m.player_value})</div>
+    <div class="cards">${(m.player||[]).map(cardHTML).join("")}</div>
+    ${m.done?`<div class="result-line ${m.delta>0?"win":m.delta<0?"lose":"neutral"}" style="margin-top:10px">${esc(m.result||"")} (${m.delta>0?"+":""}${m.delta} 🪙)</div>`:""}`;
+  const deal=$("#bj-deal"),hit=$("#bj-hit"),stand=$("#bj-stand");
+  if(deal){deal.disabled=!m.done;hit.disabled=m.done;stand.disabled=m.done;}
+}
+
+/* ---------- DUELS ---------- */
+$("#btn-duel").onclick=()=>{
+  if(!S.current||S.current.type!=="dm"){toast("Ouvre une conversation avec un ami pour le défier.","err");return;}
+  const opp=S.current.id;
+  overlay(`<div class="sheet modal-sm"><h2>⚔️ Défier ${esc(opp)}</h2>
+    <div class="bet-row" style="margin-top:14px"><span>Mise</span><input class="field" id="ch-bet" type="number" value="0" min="0"></div>
+    <div class="hint">0 = pour l'honneur</div>
+    <div class="row center"><button class="btn" onclick="challenge('${esc(opp)}','morpion')">Morpion</button>
+    <button class="btn pink" onclick="challenge('${esc(opp)}','puissance4')">Puissance 4</button></div>
+    <div class="row center" style="margin-top:10px"><button class="btn ghost sm" onclick="closeOverlays()">Annuler</button></div></div>`);
+};
+function challenge(opp,game){
+  const eb=$("#ch-bet");const b=Math.max(0,(eb?parseInt(eb.value):0)||0);
+  send("duel_challenge",{opponent:opp,game,bet:b}); closeOverlays();
+}
+function showInvite(m){
+  S.pendingInvite=m;
+  const stake=m.bet?`pour <b>${m.bet}</b> 🪙`:"pour l'honneur";
+  overlay(`<div class="sheet modal-sm"><h2>⚔️ Défi reçu !</h2>
+    <div class="hint"><b>${esc(m.from)}</b> te défie au <b>${m.game==="morpion"?"Morpion":"Puissance 4"}</b> ${stake}.</div>
+    <div class="row center"><button class="btn green" onclick="send('duel_accept',{match_id:${m.match_id}});closeOverlays()">Accepter</button>
+    <button class="btn ghost" onclick="send('duel_decline',{match_id:${m.match_id}});closeOverlays()">Refuser</button></div></div>`);
+}
+function openDuel(m){
+  S.duel={mid:m.match_id,game:m.game,you:m.you,players:m.players,bet:m.bet,board:m.board,turn:m.turn,over:false};
+  closeOverlays();
+  overlay(`<div class="sheet"><div class="duel-title" id="d-title"></div><div class="duel-status" id="d-status"></div>
+    <div id="d-board"></div>
+    <div class="row center" style="margin-top:16px"><button class="btn ghost sm" id="d-forfeit">🏳️ Abandonner</button></div></div>`);
+  $("#d-forfeit").onclick=()=>{if(S.duel&&!S.duel.over)send("duel_forfeit",{match_id:S.duel.mid});closeOverlays();S.duel=null;};
+  renderDuel();
+}
+const SYM={morpion:["❌","⭕"],puissance4:["r","y"]};
+function renderDuel(){
+  const d=S.duel; if(!d)return;
+  const opp=d.players[1-d.you], mine=d.turn===d.you&&!d.over;
+  $("#d-title").innerHTML=`⚔️ ${d.game==="morpion"?"Morpion":"Puissance 4"} ${d.bet?`· <span style="color:var(--gold)">mise ${d.bet} 🪙</span>`:""}`;
+  const st=$("#d-status");
+  if(d.over){const c=d.delta>0?"win":d.delta<0?"lose":"neutral";st.innerHTML=`<span class="${c}">${esc(d.result||"Terminé")}</span>`;}
+  else st.textContent=mine?"À toi de jouer !":"Au tour de "+opp+"…";
+  const board=$("#d-board"); board.innerHTML="";
+  if(d.game==="morpion"){
+    const g=el("div","morpion");
+    d.board.forEach((v,i)=>{
+      const c=el("div","cell"+(v===""&&mine?" playable":""));
+      if(v!==""){const s=el("span","drop",SYM.morpion[+v]);c.appendChild(s);}
+      if(v===""&&mine)c.onclick=()=>send("duel_move",{match_id:d.mid,move:i});
+      g.appendChild(c);
+    });
+    board.appendChild(g);
+  } else {
+    const wrap=el("div","p4wrap");
+    const cols=el("div","p4cols");
+    for(let c=0;c<7;c++){const b=el("button","p4colbtn","▼");b.disabled=!(d.board[c]===""&&mine);
+      b.onclick=()=>send("duel_move",{match_id:d.mid,move:c});cols.appendChild(b);}
+    const grid=el("div","p4grid");
+    for(let i=0;i<42;i++){const cell=el("div","p4cell");const v=d.board[i];
+      if(v!==""){const tok=el("div","tok "+(v==="0"?"r":"y"));cell.appendChild(tok);}grid.appendChild(cell);}
+    wrap.appendChild(cols);wrap.appendChild(grid);board.appendChild(wrap);
+  }
+}
+window.play=play;window.send=send;window.challenge=challenge;window.closeOverlays=closeOverlays;window.bet=bet;window.$=$;
+
+/* ---------- boot ---------- */
+setAuthMode("login");
+connect();
+</script>
+</body>
+</html>

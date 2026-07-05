@@ -5,11 +5,37 @@ from __future__ import annotations
 import argparse
 import asyncio
 import signal
+from pathlib import Path
 
 import websockets
+from websockets.datastructures import Headers
+from websockets.http11 import Response
 
 from . import DEFAULT_PORT, casino, games, protocol
 from .db import DB
+
+# Page du client web, servie en HTTP sur le même port que le WebSocket.
+_WEBCLIENT = Path(__file__).parent / "webclient.html"
+
+
+def _load_webclient() -> bytes:
+    try:
+        return _WEBCLIENT.read_bytes()
+    except OSError:
+        return b"<!doctype html><meta charset=utf-8><title>papote</title><p>Client web indisponible."
+
+
+def _make_process_request(html: bytes):
+    """Sert la page web pour les requetes HTTP ; laisse passer les WebSockets."""
+    def process_request(connection, request):
+        if request.headers.get("Upgrade", "").lower() == "websocket":
+            return None
+        headers = Headers()
+        headers["Content-Type"] = "text/html; charset=utf-8"
+        headers["Content-Length"] = str(len(html))
+        headers["Cache-Control"] = "no-cache"
+        return Response(200, "OK", headers, html)
+    return process_request
 
 
 class Server:
@@ -552,8 +578,11 @@ async def _amain(host, port, db_path):
             asyncio.get_running_loop().add_signal_handler(sig, lambda: stop.set_result(None))
     except (NotImplementedError, RuntimeError):
         pass
-    async with websockets.serve(server.handler, host, port, max_size=2 ** 20):
+    process_request = _make_process_request(_load_webclient())
+    async with websockets.serve(server.handler, host, port, max_size=2 ** 20,
+                                process_request=process_request):
         print(f"papote-server à l'écoute sur ws://{host}:{port}  (db: {db.path})", flush=True)
+        print(f"  client web : http://{host}:{port}/", flush=True)
         await stop
     print("papote-server arrêté.", flush=True)
 
