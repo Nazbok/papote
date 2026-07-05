@@ -107,12 +107,6 @@ Clique ton nom (en haut) pour éditer ton profil : **photo**, **bannière**,
 **bio**, **statut** et **couleur de thème**. Clique l'avatar de quelqu'un (liste
 en ligne, membres d'un serveur, en-tête d'un DM) pour voir sa carte.
 
-## 🛡️ Vue admin (IP des connectés)
-
-Le compte **admin** (par défaut `sana`, voir `--admin`) voit un bouton **🛡️**
-dans la barre du haut : la liste **en direct** des sessions connectées avec leur
-**IP**, leur appareil et leur salon vocal courant. Cette vue est **refusée côté
-serveur** à tout autre compte.
 
 ## 📊 Statistiques
 
