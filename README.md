@@ -16,10 +16,18 @@ latérale (bouton **🎰 Casino** ou `Ctrl+J`) :
 | 🪙 Pile ou Face | choisis pile ou face | ×2 |
 | 🎲 Dés | devine le résultat (1-6) | ×6 |
 | 🎰 Machine à sous | trois rouleaux | jusqu'à ×30 (💎💎💎) |
+| 🎡 Roulette | numéro, rouge/noir, pair/impair, bas/haut, douzaine | ×2 à ×35 |
+| 🃏 Blackjack | tire ou reste, bats le croupier | ×2 (blackjack ×2,5) |
 
 Le **classement** (bouton 🏆 ou `Ctrl+P`) montre les plus gros portefeuilles de
 tous les joueurs. À court de jetons ? Le bouton **🎁 Bonus** te redonne 100
 jetons quand tu es fauché. Tout le hasard et les soldes sont gérés côté serveur.
+
+## 🌐 Qui est en ligne
+
+Le bouton **🌐 En ligne** (ou `Ctrl+O`) ouvre l'annuaire des utilisateurs
+connectés : clique sur quelqu'un pour lui envoyer une demande d'ami (ou accepter
+la sienne) sans avoir à taper son nom.
 
 ## Installation
 

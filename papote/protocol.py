@@ -14,9 +14,13 @@ Requêtes client -> serveur (champ "op") :
   send              {to_type:"dm"|"group", to:username|group_id, body}
   history           {with_type, with, limit?}
   casino_state      {}
-  casino_play       {game:"coinflip"|"dice"|"slots", bet, choice?}
+  casino_play       {game:"coinflip"|"dice"|"slots"|"roulette", bet, choice?}
   casino_bonus      {}
   leaderboard       {limit?}
+  bj_deal           {bet}                 # blackjack : distribuer
+  bj_hit            {}                     # blackjack : tirer une carte
+  bj_stand          {}                     # blackjack : rester
+  who_online        {}                     # liste des utilisateurs connectés
 
 Réponses serveur -> client :
   {"ok":true, "reply":<op>, ...}   ou   {"ok":false, "reply":<op>, "error":"..."}

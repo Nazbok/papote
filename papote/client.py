@@ -141,6 +141,8 @@ class CasinoScreen(ModalScreen):
                 yield Button("🎲 Lancer le dé (×6)", id="dice-roll")
             with Horizontal(classes="casino-row"):
                 yield Button("🎰 Machine à sous", variant="success", id="slots")
+                yield Button("🎡 Roulette", id="roulette")
+                yield Button("🃏 Blackjack", id="blackjack")
             with Horizontal(classes="casino-row"):
                 yield Button("🎁 Bonus", id="bonus")
                 yield Button("🏆 Classement", id="board")
@@ -174,6 +176,10 @@ class CasinoScreen(ModalScreen):
             self.dismiss(None)
         elif bid == "board":
             self.app.open_leaderboard()
+        elif bid == "roulette":
+            self.app.open_roulette()
+        elif bid == "blackjack":
+            self.app.open_blackjack()
         elif bid == "bonus":
             self.app.net_send(op="casino_bonus")
         elif bid == "cf-pile":
@@ -238,11 +244,215 @@ class LeaderboardScreen(ModalScreen):
             )
 
 
+class RouletteScreen(ModalScreen):
+    BINDINGS = [("escape", "close", "Fermer")]
+
+    BETS = [
+        ("🔴 Rouge", "rouge"), ("⚫ Noir", "noir"),
+        ("Pair", "pair"), ("Impair", "impair"),
+        ("Bas 1-18", "bas"), ("Haut 19-36", "haut"),
+        ("Douzaine 1", "d1"), ("Douzaine 2", "d2"), ("Douzaine 3", "d3"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="roulette-box"):
+            yield Static("🎡  R O U L E T T E", id="roulette-title")
+            yield Static("", id="roulette-balance")
+            with Horizontal(classes="casino-row"):
+                yield Input(value="100", id="roulette-bet", type="integer")
+                yield Input(value="17", id="roulette-num", type="integer")
+                yield Button("🎯 Miser sur le n°", id="roulette-number")
+            with Horizontal(classes="casino-row"):
+                for label, code in self.BETS[:5]:
+                    yield Button(label, id=f"r-{code}")
+            with Horizontal(classes="casino-row"):
+                for label, code in self.BETS[5:]:
+                    yield Button(label, id=f"r-{code}")
+            with Horizontal(classes="casino-row"):
+                yield Button("✖ Fermer", id="close")
+            yield RichLog(id="roulette-log", markup=True, wrap=True)
+
+    def on_mount(self) -> None:
+        self.app.net_send(op="casino_state")
+        self.refresh_balance()
+        self.query_one("#roulette-log", RichLog).write(
+            "[dim]Numéro plein ×35 · rouge/noir/pair/impair/bas/haut ×2 · douzaine ×3[/dim]"
+        )
+
+    def refresh_balance(self) -> None:
+        self.query_one("#roulette-balance", Static).update(
+            f"Solde : [b yellow]{self.app.balance}[/b yellow] jetons"
+        )
+
+    def _bet(self) -> int:
+        try:
+            return int(self.query_one("#roulette-bet", Input).value)
+        except ValueError:
+            return 0
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id
+        if bid == "close":
+            self.dismiss(None)
+        elif bid == "roulette-number":
+            num = self.query_one("#roulette-num", Input).value.strip()
+            self.app.net_send(op="casino_play", game="roulette", bet=self._bet(), choice=num)
+        elif bid and bid.startswith("r-"):
+            self.app.net_send(op="casino_play", game="roulette", bet=self._bet(), choice=bid[2:])
+
+    def on_result(self, msg: dict) -> None:
+        self.refresh_balance()
+        log = self.query_one("#roulette-log", RichLog)
+        delta = msg.get("delta", 0)
+        detail = escape(str(msg.get("detail", "")))
+        tag = "green" if msg.get("won") else "red"
+        mark = "✔" if msg.get("won") else "✘"
+        log.write(f"[{tag}]{mark}[/{tag}] {detail}   [b {tag}]{delta:+d}[/b {tag}] jetons")
+
+
+class BlackjackScreen(ModalScreen):
+    BINDINGS = [("escape", "close", "Fermer")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="bj-box"):
+            yield Static("🃏  B L A C K J A C K", id="bj-title")
+            yield Static("", id="bj-balance")
+            yield Static("Croupier :", id="bj-dealer")
+            yield Static("Toi :", id="bj-player")
+            yield Static("", id="bj-result")
+            with Horizontal(classes="casino-row"):
+                yield Input(value="100", id="bj-bet", type="integer")
+                yield Button("🃏 Distribuer", variant="success", id="bj-deal")
+            with Horizontal(classes="casino-row"):
+                yield Button("➕ Tirer", id="bj-hit", disabled=True)
+                yield Button("✋ Rester", id="bj-stand", disabled=True)
+                yield Button("✖ Fermer", id="close")
+
+    def on_mount(self) -> None:
+        self.app.net_send(op="casino_state")
+        self.refresh_balance()
+
+    def refresh_balance(self) -> None:
+        self.query_one("#bj-balance", Static).update(
+            f"Solde : [b yellow]{self.app.balance}[/b yellow] jetons"
+        )
+
+    def _bet(self) -> int:
+        try:
+            return int(self.query_one("#bj-bet", Input).value)
+        except ValueError:
+            return 0
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id
+        if bid == "close":
+            self.dismiss(None)
+        elif bid == "bj-deal":
+            self.app.net_send(op="bj_deal", bet=self._bet())
+        elif bid == "bj-hit":
+            self.app.net_send(op="bj_hit")
+        elif bid == "bj-stand":
+            self.app.net_send(op="bj_stand")
+
+    def render_state(self, msg: dict) -> None:
+        self.refresh_balance()
+        dealer = "  ".join(msg.get("dealer", []))
+        dval = msg.get("dealer_value")
+        dtxt = f"  [b]({dval})[/b]" if dval is not None else ""
+        self.query_one("#bj-dealer", Static).update(f"Croupier :  [red]{escape(dealer)}[/red]{dtxt}")
+        player = "  ".join(msg.get("player", []))
+        pval = msg.get("player_value")
+        self.query_one("#bj-player", Static).update(
+            f"Toi :  [cyan]{escape(player)}[/cyan]  [b]({pval})[/b]"
+        )
+        done = msg.get("done")
+        self.query_one("#bj-hit", Button).disabled = done
+        self.query_one("#bj-stand", Button).disabled = done
+        self.query_one("#bj-deal", Button).disabled = not done
+        result = self.query_one("#bj-result", Static)
+        if done and msg.get("result"):
+            delta = msg.get("delta", 0)
+            tag = "green" if delta > 0 else ("red" if delta < 0 else "yellow")
+            result.update(f"[b {tag}]{escape(msg['result'])}   ({delta:+d} jetons)[/b {tag}]")
+        else:
+            result.update("[dim]À toi de jouer : tire ou reste.[/dim]")
+
+
+class OnlineScreen(ModalScreen):
+    BINDINGS = [("escape", "close", "Fermer")]
+
+    REL_LABEL = {
+        "friend": "[green]déjà ami[/green]",
+        "outgoing": "[dim]demande envoyée[/dim]",
+        "incoming": "[yellow]t'a ajouté — accepte ![/yellow]",
+        "none": "",
+    }
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="online-box"):
+            yield Static("🌐  Qui est en ligne", id="online-title")
+            yield ListView(id="online-list")
+            with Horizontal(classes="modal-buttons"):
+                yield Button("🔄 Rafraîchir", id="refresh")
+                yield Button("Fermer", variant="primary", id="close")
+
+    def on_mount(self) -> None:
+        self.app.net_send(op="who_online")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "refresh":
+            self.app.net_send(op="who_online")
+        else:
+            self.dismiss(None)
+
+    async def show(self, users: list) -> None:
+        lv = self.query_one("#online-list", ListView)
+        await lv.clear()
+        if not users:
+            await lv.append(ListItem(Label("[dim]Personne d'autre en ligne.[/dim]")))
+            return
+        for u in users:
+            rel = u.get("relation", "none")
+            note = self.REL_LABEL.get(rel, "")
+            action = "" if rel in ("friend", "outgoing") else "  [b cyan](Entrée = ajouter)[/b cyan]"
+            item = ListItem(Label(f"[green]●[/green] [b]{escape(u['username'])}[/b]  {note}{action}"))
+            item.online_user = u
+            await lv.append(item)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        u = getattr(event.item, "online_user", None)
+        if not u:
+            return
+        rel = u.get("relation", "none")
+        if rel == "friend":
+            self.app.notify(f"{u['username']} est déjà ton ami.")
+        elif rel == "outgoing":
+            self.app.notify("Demande déjà envoyée.")
+        elif rel == "incoming":
+            self.app.net_send(op="friend_accept", username=u["username"])
+            self.app.notify(f"Tu as accepté {u['username']} !")
+            self.dismiss(None)
+        else:
+            self.app.net_send(op="friend_add", username=u["username"])
+            self.app.notify(f"Demande d'ami envoyée à {u['username']}.")
+            self.dismiss(None)
+
+
 # --- Écran principal ---------------------------------------------------------
 
 class MainScreen(Screen):
     BINDINGS = [
         ("ctrl+a", "add_friend", "Ajouter un ami"),
+        ("ctrl+o", "online", "🌐 En ligne"),
         ("ctrl+g", "new_group", "Nouveau groupe"),
         ("ctrl+j", "casino", "🎰 Casino"),
         ("ctrl+p", "leaderboard", "🏆 Classement"),
@@ -257,8 +467,9 @@ class MainScreen(Screen):
                 yield ListView(id="sidebar")
                 with Horizontal(id="side-buttons"):
                     yield Button("➕ Ami", variant="primary", id="btn-add")
-                    yield Button("👥 Groupe", id="btn-group")
+                    yield Button("🌐 En ligne", id="btn-online")
                 with Horizontal(id="side-buttons2"):
+                    yield Button("👥 Groupe", id="btn-group")
                     yield Button("🎰 Casino", variant="success", id="btn-casino")
                     yield Button("🏆", id="btn-board")
             with Vertical(id="chat-pane"):
@@ -282,9 +493,14 @@ class MainScreen(Screen):
     def action_leaderboard(self) -> None:
         self.app.open_leaderboard()
 
+    def action_online(self) -> None:
+        self.app.open_online()
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-add":
             self.action_add_friend()
+        elif event.button.id == "btn-online":
+            self.action_online()
         elif event.button.id == "btn-group":
             self.action_new_group()
         elif event.button.id == "btn-casino":
@@ -335,7 +551,7 @@ class PapoteApp(App):
     .modal-buttons { height: auto; align: center middle; padding-top: 1; }
     Button { margin: 0 1; }
 
-    CasinoScreen, LeaderboardScreen { align: center middle; }
+    CasinoScreen, LeaderboardScreen, RouletteScreen, BlackjackScreen { align: center middle; }
     #casino-box { width: 72; height: auto; border: round $success; padding: 1 2; background: $panel; }
     #casino-title { text-align: center; text-style: bold; color: $success; }
     #casino-balance { text-align: center; padding-bottom: 1; }
@@ -346,6 +562,24 @@ class PapoteApp(App):
     #board-box { width: 72; height: auto; border: round $warning; padding: 1 2; background: $panel; }
     #board-title { text-align: center; text-style: bold; color: $warning; padding-bottom: 1; }
     #board-log { height: 16; background: $surface; padding: 0 1; }
+
+    #roulette-box { width: 80; height: auto; border: round $error; padding: 1 2; background: $panel; }
+    #roulette-title { text-align: center; text-style: bold; color: $error; }
+    #roulette-balance { text-align: center; padding-bottom: 1; }
+    #roulette-bet, #roulette-num { width: 12; }
+    #roulette-log { height: 8; background: $surface; margin-top: 1; padding: 0 1; }
+
+    #bj-box { width: 66; height: auto; border: round $success; padding: 1 2; background: $panel; }
+    #bj-title { text-align: center; text-style: bold; color: $success; padding-bottom: 1; }
+    #bj-balance { text-align: center; padding-bottom: 1; }
+    #bj-dealer, #bj-player { padding: 1 0 0 0; }
+    #bj-result { text-align: center; padding-top: 1; min-height: 1; }
+    #bj-bet { width: 12; }
+
+    OnlineScreen { align: center middle; }
+    #online-box { width: 60; height: auto; border: round $accent; padding: 1 2; background: $panel; }
+    #online-title { text-align: center; text-style: bold; color: $accent; padding-bottom: 1; }
+    #online-list { height: 14; background: $surface; }
     """
 
     def __init__(self, server_arg=None):
@@ -362,6 +596,9 @@ class PapoteApp(App):
         self.balance = 0     # solde de jetons du casino
         self.casino = None   # référence à l'écran casino (si ouvert)
         self.board = None    # référence à l'écran classement (si ouvert)
+        self.roulette = None       # écran roulette (si ouvert)
+        self.blackjack = None      # écran blackjack (si ouvert)
+        self.online_screen = None  # écran « qui est en ligne » (si ouvert)
 
     def on_mount(self) -> None:
         self.login = LoginScreen()
@@ -489,15 +726,25 @@ class PapoteApp(App):
                 self.casino.refresh_balance()
         elif reply == "casino_play":
             self.balance = msg.get("balance", self.balance)
-            if self.casino:
+            if msg.get("game") == "roulette" and self.roulette:
+                self.roulette.on_result(msg)
+            elif self.casino:
                 self.casino.on_result(msg)
         elif reply == "casino_bonus":
             self.balance = msg.get("balance", self.balance)
             if self.casino:
                 self.casino.on_bonus()
+        elif reply == "blackjack":
+            self.balance = msg.get("balance", self.balance)
+            if self.blackjack:
+                self.blackjack.render_state(msg)
         elif reply == "leaderboard":
             if self.board:
                 self.board.show(msg.get("players", []))
+        elif reply == "who_online":
+            if self.online_screen:
+                self.run_worker(self.online_screen.show(msg.get("users", [])),
+                                exclusive=True, group="online")
 
     def _incoming_message(self, m: dict) -> None:
         if m["to_type"] == "dm":
@@ -578,6 +825,24 @@ class PapoteApp(App):
         self.board = LeaderboardScreen()
         self.push_screen(self.board, lambda _=None: setattr(self, "board", None))
         self.net_send(op="leaderboard")
+
+    def open_roulette(self) -> None:
+        if not self.main:
+            return
+        self.roulette = RouletteScreen()
+        self.push_screen(self.roulette, lambda _=None: setattr(self, "roulette", None))
+
+    def open_blackjack(self) -> None:
+        if not self.main:
+            return
+        self.blackjack = BlackjackScreen()
+        self.push_screen(self.blackjack, lambda _=None: setattr(self, "blackjack", None))
+
+    def open_online(self) -> None:
+        if not self.main:
+            return
+        self.online_screen = OnlineScreen()
+        self.push_screen(self.online_screen, lambda _=None: setattr(self, "online_screen", None))
 
     # --- barre latérale -----------------------------------------------------
 

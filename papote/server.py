@@ -16,6 +16,7 @@ class Server:
     def __init__(self, db: DB):
         self.db = db
         self.online: dict[str, set] = {}   # username -> {websockets}
+        self.blackjack: dict[int, dict] = {}  # user_id -> partie de blackjack en cours
 
     # --- présence / envoi ---------------------------------------------------
 
@@ -160,6 +161,15 @@ class Server:
                 limit = min(int(req.get("limit", 20)), 100)
                 await ws.send(protocol.ok(op, players=self.db.leaderboard(limit)))
 
+            elif op == "bj_deal":
+                await self._handle_bj_deal(ws, user, req)
+
+            elif op in ("bj_hit", "bj_stand"):
+                await self._handle_bj_action(ws, user, op)
+
+            elif op == "who_online":
+                await ws.send(protocol.ok(op, users=self._online_users(user)))
+
             else:
                 await ws.send(protocol.err(op or "?", "Opération inconnue."))
         except (KeyError, ValueError) as e:
@@ -244,6 +254,57 @@ class Server:
         balance = self.db.apply_casino_result(uid, outcome["delta"])
         await ws.send(protocol.ok("casino_play", bet=bet, balance=balance, **outcome))
 
+    # --- blackjack ----------------------------------------------------------
+
+    async def _handle_bj_deal(self, ws, user, req):
+        uid = user["id"]
+        try:
+            bet = int(req.get("bet", 0))
+        except (TypeError, ValueError):
+            await ws.send(protocol.err("blackjack", "Mise invalide."))
+            return
+        if bet <= 0:
+            await ws.send(protocol.err("blackjack", "La mise doit être positive."))
+            return
+        state = self.db.casino_state(uid)
+        if bet > state["balance"]:
+            await ws.send(protocol.err("blackjack", "Solde insuffisant pour cette mise."))
+            return
+        game = casino.bj_new_game(bet)
+        self.blackjack[uid] = game
+        balance = state["balance"]
+        if game["done"]:                       # blackjack immédiat : on solde tout de suite
+            balance = self.db.apply_casino_result(uid, game["delta"])
+            self.blackjack.pop(uid, None)
+        await ws.send(protocol.ok("blackjack", balance=balance, **casino.bj_public(game)))
+
+    async def _handle_bj_action(self, ws, user, op):
+        uid = user["id"]
+        game = self.blackjack.get(uid)
+        if not game:
+            await ws.send(protocol.err("blackjack", "Aucune partie de blackjack en cours."))
+            return
+        if op == "bj_hit":
+            casino.bj_hit(game)
+        else:
+            casino.bj_stand(game)
+        balance = self.db.casino_state(uid)["balance"]
+        if game["done"]:
+            balance = self.db.apply_casino_result(uid, game["delta"])
+            self.blackjack.pop(uid, None)
+        await ws.send(protocol.ok("blackjack", balance=balance, **casino.bj_public(game)))
+
+    # --- annuaire des connectés ---------------------------------------------
+
+    def _online_users(self, user):
+        """Liste des utilisateurs en ligne (hors soi) avec leur relation."""
+        rel = {f["username"]: f["kind"] for f in self.db.list_friends(user["id"])}
+        return [
+            {"username": uname, "relation": rel.get(uname, "none")}
+            for uname in sorted(self.online)
+            if uname != user["username"]
+        ]
+
     # --- boucle par connexion ----------------------------------------------
 
     async def handler(self, ws):
@@ -269,6 +330,7 @@ class Server:
             if user is not None:
                 self._remove_online(user["username"], ws)
                 if not self.is_online(user["username"]):
+                    self.blackjack.pop(user["id"], None)
                     await self.notify_presence(user, False)
 
 
