@@ -29,7 +29,15 @@ def normalize_url(s: str) -> str:
     s = s.strip()
     if not s:
         return ""
+    # Convertit un éventuel schéma http(s) en ws(s) : on colle souvent l'URL
+    # https:// donnée par Cloudflare, mais WebSocket exige ws:// ou wss://.
     if "://" in s:
+        scheme, _, rest = s.partition("://")
+        scheme = scheme.lower()
+        if scheme in ("http", "ws"):
+            return "ws://" + rest
+        if scheme in ("https", "wss"):
+            return "wss://" + rest
         return s
     host = s.split("/")[0].split(":")[0]
     if host in ("localhost", "127.0.0.1"):
